@@ -21,6 +21,10 @@ LDFLAGS ?=
 BOOTSTRAP_OBJ := $(BUILD_DIR)/main.o
 COMMANDS_OBJ := $(BUILD_DIR)/commands.o
 PARSER_OBJ := $(BUILD_DIR)/parser.o
+CONFIG_OBJ := $(BUILD_DIR)/config.o
+THREAD_POOL_OBJ := $(BUILD_DIR)/thread_pool.o
+TIME_UTILS_OBJ := $(BUILD_DIR)/time_utils.o
+IO_UTILS_OBJ := $(BUILD_DIR)/io_utils.o
 TEST_OBJ := $(BUILD_DIR)/test_main.o
 
 ifeq ($(OS),Windows_NT)
@@ -61,9 +65,9 @@ test: $(TEST_BIN)
 run: release
 >$(RUN_APP)
 
-$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ)
+$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
->$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+>$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(TEST_BIN): $(TEST_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
@@ -78,6 +82,22 @@ $(BUILD_DIR)/commands.o: src/cli/commands.c include/cli/commands.h include/cli/p
 >$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/parser.o: src/cli/parser.c include/cli/parser.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/config.o: src/util/config.c include/util/config.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/thread_pool.o: src/util/thread_pool.c include/util/thread_pool.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/time_utils.o: src/util/time_utils.c include/util/time_utils.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/io_utils.o: src/util/io_utils.c include/util/io_utils.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
