@@ -25,6 +25,10 @@ CONFIG_OBJ := $(BUILD_DIR)/config.o
 THREAD_POOL_OBJ := $(BUILD_DIR)/thread_pool.o
 TIME_UTILS_OBJ := $(BUILD_DIR)/time_utils.o
 IO_UTILS_OBJ := $(BUILD_DIR)/io_utils.o
+REPO_OBJ := $(BUILD_DIR)/repo.o
+CHUNK_STORE_OBJ := $(BUILD_DIR)/chunk_store.o
+INDEX_STORE_OBJ := $(BUILD_DIR)/index_store.o
+SNAPSHOT_STORE_OBJ := $(BUILD_DIR)/snapshot_store.o
 TEST_OBJ := $(BUILD_DIR)/test_main.o
 
 ifeq ($(OS),Windows_NT)
@@ -65,9 +69,9 @@ test: $(TEST_BIN)
 run: release
 >$(RUN_APP)
 
-$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ)
+$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
->$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+>$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(TEST_BIN): $(TEST_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
@@ -98,6 +102,22 @@ $(BUILD_DIR)/time_utils.o: src/util/time_utils.c include/util/time_utils.h
 >$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/io_utils.o: src/util/io_utils.c include/util/io_utils.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/repo.o: src/storage/repo.c include/storage/repo.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/chunk_store.o: src/storage/chunk_store.c include/storage/chunk_store.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/index_store.o: src/storage/index_store.c include/storage/index_store.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/snapshot_store.o: src/storage/snapshot_store.c include/storage/snapshot_store.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
