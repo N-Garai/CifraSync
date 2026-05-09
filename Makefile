@@ -20,6 +20,7 @@ LDFLAGS ?=
 
 BOOTSTRAP_OBJ := $(BUILD_DIR)/main.o
 COMMANDS_OBJ := $(BUILD_DIR)/commands.o
+PARSER_OBJ := $(BUILD_DIR)/parser.o
 TEST_OBJ := $(BUILD_DIR)/test_main.o
 
 ifeq ($(OS),Windows_NT)
@@ -60,9 +61,9 @@ test: $(TEST_BIN)
 run: release
 >$(RUN_APP)
 
-$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ)
+$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
->$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+>$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(TEST_BIN): $(TEST_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
@@ -73,6 +74,10 @@ $(BUILD_DIR)/main.o: $(SRC_BOOTSTRAP)
 >$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/commands.o: src/cli/commands.c include/cli/commands.h include/cli/parser.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/parser.o: src/cli/parser.c include/cli/parser.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
