@@ -33,6 +33,9 @@ REPO_OBJ := $(BUILD_DIR)/repo.o
 CHUNK_STORE_OBJ := $(BUILD_DIR)/chunk_store.o
 INDEX_STORE_OBJ := $(BUILD_DIR)/index_store.o
 SNAPSHOT_STORE_OBJ := $(BUILD_DIR)/snapshot_store.o
+ENGINE_OBJ := $(BUILD_DIR)/engine.o
+PLANNER_OBJ := $(BUILD_DIR)/planner.o
+JOURNAL_OBJ := $(BUILD_DIR)/journal.o
 TEST_OBJ := $(BUILD_DIR)/test_main.o
 
 ifeq ($(OS),Windows_NT)
@@ -73,9 +76,9 @@ test: $(TEST_BIN)
 run: release
 >$(RUN_APP)
 
-$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ)
+$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
->$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+>$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(TEST_BIN): $(TEST_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
@@ -138,6 +141,18 @@ $(BUILD_DIR)/index_store.o: src/storage/index_store.c include/storage/index_stor
 >$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/snapshot_store.o: src/storage/snapshot_store.c include/storage/snapshot_store.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/engine.o: src/core/engine.c include/core/engine.h include/common/log.h include/core/journal.h include/core/planner.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/planner.o: src/core/planner.c include/core/planner.h include/common/path.h include/common/log.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/journal.o: src/core/journal.c include/core/journal.h include/common/path.h include/common/log.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
