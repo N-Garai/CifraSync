@@ -35,6 +35,9 @@ CONFIG_OBJ := $(BUILD_DIR)/config.o
 THREAD_POOL_OBJ := $(BUILD_DIR)/thread_pool.o
 TIME_UTILS_OBJ := $(BUILD_DIR)/time_utils.o
 IO_UTILS_OBJ := $(BUILD_DIR)/io_utils.o
+FS_SCANNER_OBJ := $(BUILD_DIR)/fs_scanner.o
+FS_METADATA_OBJ := $(BUILD_DIR)/fs_metadata.o
+FS_FILE_READER_OBJ := $(BUILD_DIR)/fs_file_reader.o
 REPO_OBJ := $(BUILD_DIR)/repo.o
 CHUNK_STORE_OBJ := $(BUILD_DIR)/chunk_store.o
 INDEX_STORE_OBJ := $(BUILD_DIR)/index_store.o
@@ -82,9 +85,9 @@ test: $(TEST_BIN)
 run: release
 >$(RUN_APP)
 
-$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
+$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
->$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+>$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(TEST_BIN): $(TEST_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
@@ -155,6 +158,18 @@ $(BUILD_DIR)/time_utils.o: src/util/time_utils.c include/util/time_utils.h
 >$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/io_utils.o: src/util/io_utils.c include/util/io_utils.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/fs_scanner.o: src/fs/scanner.c include/fs/scanner.h include/fs/metadata.h include/common/path.h include/common/memory.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/fs_metadata.o: src/fs/metadata.c include/fs/metadata.h include/common/path.h include/common/memory.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/fs_file_reader.o: src/fs/file_reader.c include/fs/file_reader.h include/common/memory.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
