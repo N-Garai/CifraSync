@@ -25,6 +25,9 @@ LOG_OBJ := $(BUILD_DIR)/log.o
 PATH_OBJ := $(BUILD_DIR)/path.o
 MEMORY_OBJ := $(BUILD_DIR)/memory.o
 CODEC_OBJ := $(BUILD_DIR)/codec.o
+HASH_OBJ := $(BUILD_DIR)/hash.o
+CHUNKER_OBJ := $(BUILD_DIR)/chunker.o
+MANIFEST_OBJ := $(BUILD_DIR)/manifest.o
 KDF_OBJ := $(BUILD_DIR)/kdf.o
 CIPHER_OBJ := $(BUILD_DIR)/cipher.o
 KEY_CACHE_OBJ := $(BUILD_DIR)/key_cache.o
@@ -79,9 +82,9 @@ test: $(TEST_BIN)
 run: release
 >$(RUN_APP)
 
-$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
+$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
->$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+>$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(TEST_BIN): $(TEST_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
@@ -112,6 +115,18 @@ $(BUILD_DIR)/memory.o: src/common/memory.c include/common/memory.h
 >$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/codec.o: src/compress/codec.c include/compress/codec.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/hash.o: src/delta/hash.c include/delta/hash.h include/crypto/kdf.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/chunker.o: src/delta/chunker.c include/delta/chunker.h include/delta/hash.h include/common/memory.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/manifest.o: src/delta/manifest.c include/delta/manifest.h include/delta/chunker.h include/common/memory.h include/common/path.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
