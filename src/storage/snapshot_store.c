@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <ctype.h>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -65,6 +66,52 @@ static int ensure_directory(const char *path) {
 	}
 #endif
 	return -1;
+}
+
+static int snapshot_filename_component(const char *snapshot_id, char *out, size_t out_size) {
+	size_t src_index;
+	size_t dst_index;
+
+	if (snapshot_id == NULL || out == NULL || out_size == 0U) {
+		return -1;
+	}
+
+	for (src_index = 0U, dst_index = 0U; snapshot_id[src_index] != '\0'; ++src_index) {
+		unsigned char ch = (unsigned char)snapshot_id[src_index];
+		char mapped = (char)ch;
+
+		if (!((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '-' || ch == '_' || ch == '.')) {
+			mapped = '-';
+		}
+
+		if (dst_index + 1U >= out_size) {
+			return -1;
+		}
+		out[dst_index++] = mapped;
+	}
+
+	out[dst_index] = '\0';
+	return 0;
+}
+
+static int snapshot_artifact_path(const char *repo_path, const char *snapshot_id, const char *suffix, char *out, size_t out_size) {
+	char snapshots_path[4096];
+	char snapshot_base[4096];
+	char snapshot_name[4096];
+
+	if (snapshot_filename_component(snapshot_id, snapshot_name, sizeof(snapshot_name)) != 0) {
+		return -1;
+	}
+	if (path_join(snapshots_path, sizeof(snapshots_path), repo_path, CS_SNAPSHOTS_DIR) != 0) {
+		return -1;
+	}
+	if (path_join(snapshot_base, sizeof(snapshot_base), snapshots_path, snapshot_name) != 0) {
+		return -1;
+	}
+	if (path_join(out, out_size, snapshot_base, suffix) != 0) {
+		return -1;
+	}
+	return 0;
 }
 
 cs_snapshot_store_t *cs_snapshot_store_open(const char *repo_path) {
@@ -144,8 +191,10 @@ int cs_snapshot_store_create(cs_snapshot_store_t *store, const char *source_path
 	              snapshot->id) != 0) {
 		return -1;
 	}
-	
-	strcat(snapshot_path, CS_SNAPSHOT_EXT);
+
+	if (snapshot_artifact_path(store->repo_path, snapshot->id, CS_SNAPSHOT_EXT, snapshot_path, sizeof(snapshot_path)) != 0) {
+		return -1;
+	}
 	
 	fp = fopen(snapshot_path, "wb");
 	if (fp == NULL) {
@@ -220,7 +269,9 @@ int cs_snapshot_store_update(cs_snapshot_store_t *store, const cs_snapshot_t *sn
 			              store->snapshots_path, snapshot->id) != 0) {
 				return -1;
 			}
-			strcat(snapshot_path, CS_SNAPSHOT_EXT);
+			if (snapshot_artifact_path(store->repo_path, snapshot->id, CS_SNAPSHOT_EXT, snapshot_path, sizeof(snapshot_path)) != 0) {
+				return -1;
+			}
 			
 			fp = fopen(snapshot_path, "wb");
 			if (fp == NULL) {
@@ -256,7 +307,9 @@ int cs_snapshot_store_delete(cs_snapshot_store_t *store, const char *snapshot_id
 			              store->snapshots_path, snapshot_id) != 0) {
 				return -1;
 			}
-			strcat(snapshot_path, CS_SNAPSHOT_EXT);
+				if (snapshot_artifact_path(store->repo_path, snapshot_id, CS_SNAPSHOT_EXT, snapshot_path, sizeof(snapshot_path)) != 0) {
+					return -1;
+				}
 			
 			if (remove(snapshot_path) != 0) {
 				return -1;
