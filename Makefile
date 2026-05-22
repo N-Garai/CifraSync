@@ -18,6 +18,10 @@ DEBUG_FLAGS := -O0 -g3 -DDEBUG
 LDLIBS ?=
 LDFLAGS ?=
 
+ifeq ($(OS),Windows_NT)
+LDLIBS += -lws2_32
+endif
+
 BOOTSTRAP_OBJ := $(BUILD_DIR)/main.o
 COMMANDS_OBJ := $(BUILD_DIR)/commands.o
 PARSER_OBJ := $(BUILD_DIR)/parser.o
@@ -35,6 +39,9 @@ CONFIG_OBJ := $(BUILD_DIR)/config.o
 THREAD_POOL_OBJ := $(BUILD_DIR)/thread_pool.o
 TIME_UTILS_OBJ := $(BUILD_DIR)/time_utils.o
 IO_UTILS_OBJ := $(BUILD_DIR)/io_utils.o
+NET_PROTOCOL_OBJ := $(BUILD_DIR)/net_protocol.o
+NET_CLIENT_OBJ := $(BUILD_DIR)/net_client.o
+NET_SERVER_OBJ := $(BUILD_DIR)/net_server.o
 FS_SCANNER_OBJ := $(BUILD_DIR)/fs_scanner.o
 FS_METADATA_OBJ := $(BUILD_DIR)/fs_metadata.o
 FS_FILE_READER_OBJ := $(BUILD_DIR)/fs_file_reader.o
@@ -85,9 +92,9 @@ test: $(TEST_BIN)
 run: release
 >$(RUN_APP)
 
-$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
+$(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(NET_PROTOCOL_OBJ) $(NET_CLIENT_OBJ) $(NET_SERVER_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
->$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+>$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(NET_PROTOCOL_OBJ) $(NET_CLIENT_OBJ) $(NET_SERVER_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(TEST_BIN): $(TEST_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
@@ -158,6 +165,18 @@ $(BUILD_DIR)/time_utils.o: src/util/time_utils.c include/util/time_utils.h
 >$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/io_utils.o: src/util/io_utils.c include/util/io_utils.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/net_protocol.o: src/net/protocol.c include/net/protocol.h include/common/memory.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/net_client.o: src/net/client.c include/net/client.h include/net/protocol.h include/common/memory.h include/common/path.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/net_server.o: src/net/server.c include/net/server.h include/net/protocol.h include/common/memory.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
