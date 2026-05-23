@@ -5,7 +5,7 @@ BUILD_DIR := build
 BIN_DIR := bin
 
 SRC_BOOTSTRAP := src/main.c src/cli/commands.c
-TEST_MAIN := tests/test_main.c
+TEST_MAIN := tests/integration/test_main.c
 
 CC := gcc
 CSTD ?= c11
@@ -96,9 +96,9 @@ $(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(
 >@$(call MKDIR,$(BIN_DIR))
 >$(CC) $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(NET_PROTOCOL_OBJ) $(NET_CLIENT_OBJ) $(NET_SERVER_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
-$(TEST_BIN): $(TEST_OBJ)
+$(TEST_BIN): $(TEST_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(NET_PROTOCOL_OBJ) $(NET_CLIENT_OBJ) $(NET_SERVER_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
->$(CC) $(TEST_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+>$(CC) $(TEST_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(NET_PROTOCOL_OBJ) $(NET_CLIENT_OBJ) $(NET_SERVER_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(BUILD_DIR)/main.o: $(SRC_BOOTSTRAP)
 >@$(call MKDIR,$(BUILD_DIR))
@@ -220,7 +220,7 @@ $(BUILD_DIR)/journal.o: src/core/journal.c include/core/journal.h include/common
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/test_main.o: $(TEST_MAIN)
+$(BUILD_DIR)/test_main.o: $(TEST_MAIN) tests/integration/test_support.h tests/integration/test_backup_restore.c tests/integration/test_incremental_resume.c tests/integration/test_remote_sync.c tests/integration/test_verify_prune.c
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
@@ -242,4 +242,4 @@ help:
 >@echo.
 >@echo Notes:
 >@echo   On Windows use mingw32-make if make is unavailable.
->@echo   This Makefile currently compiles src/main.c and tests/test_main.c.
+>@echo   This Makefile currently compiles src/main.c and tests/integration/test_main.c.

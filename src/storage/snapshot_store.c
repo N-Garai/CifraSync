@@ -108,7 +108,7 @@ static int snapshot_artifact_path(const char *repo_path, const char *snapshot_id
 	if (path_join(snapshot_base, sizeof(snapshot_base), snapshots_path, snapshot_name) != 0) {
 		return -1;
 	}
-	if (path_join(out, out_size, snapshot_base, suffix) != 0) {
+	if (snprintf(out, out_size, "%s%s", snapshot_base, suffix) < 0 || strlen(out) + 1U > out_size) {
 		return -1;
 	}
 	return 0;
