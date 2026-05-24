@@ -5,7 +5,7 @@ BUILD_DIR := build
 BIN_DIR := bin
 
 SRC_BOOTSTRAP := src/main.c src/cli/commands.c
-TEST_MAIN := tests/test_main.c
+TEST_MAIN := tests/main_test.c
 
 CC := gcc
 CSTD ?= c11
@@ -53,6 +53,9 @@ ENGINE_OBJ := $(BUILD_DIR)/engine.o
 PLANNER_OBJ := $(BUILD_DIR)/planner.o
 JOURNAL_OBJ := $(BUILD_DIR)/journal.o
 TEST_OBJ := $(BUILD_DIR)/test_main.o
+BENCHMARK_HASH_OBJ := $(BUILD_DIR)/benchmark_hash.o
+CORRUPT_CHUNK_OBJ := $(BUILD_DIR)/corrupt_chunk.o
+GEN_TEST_TREE_OBJ := $(BUILD_DIR)/gen_test_tree.o
 
 ifeq ($(OS),Windows_NT)
 EXE_EXT := .exe
@@ -71,7 +74,7 @@ endif
 APP := $(BIN_DIR)/$(PROJECT)$(EXE_EXT)
 TEST_BIN := $(BIN_DIR)/$(PROJECT)_tests$(EXE_EXT)
 
-.PHONY: all release debug asan test run clean help
+.PHONY: all release debug asan test run tools clean help
 
 all: release
 
@@ -89,6 +92,9 @@ test: CFLAGS := $(COMMON_FLAGS) $(DEBUG_FLAGS)
 test: $(TEST_BIN)
 >$(RUN_TESTS)
 
+tools: $(BIN_DIR)/benchmark_hash$(EXE_EXT) $(BIN_DIR)/corrupt_chunk$(EXE_EXT) $(BIN_DIR)/gen_test_tree$(EXE_EXT)
+tools: CFLAGS := $(COMMON_FLAGS) $(DEBUG_FLAGS)
+
 run: release
 >$(RUN_APP)
 
@@ -99,6 +105,18 @@ $(APP): $(BOOTSTRAP_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(
 $(TEST_BIN): $(TEST_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(NET_PROTOCOL_OBJ) $(NET_CLIENT_OBJ) $(NET_SERVER_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ)
 >@$(call MKDIR,$(BIN_DIR))
 >$(CC) $(TEST_OBJ) $(COMMANDS_OBJ) $(PARSER_OBJ) $(LOG_OBJ) $(PATH_OBJ) $(MEMORY_OBJ) $(CODEC_OBJ) $(HASH_OBJ) $(CHUNKER_OBJ) $(MANIFEST_OBJ) $(KDF_OBJ) $(CIPHER_OBJ) $(KEY_CACHE_OBJ) $(CONFIG_OBJ) $(THREAD_POOL_OBJ) $(TIME_UTILS_OBJ) $(IO_UTILS_OBJ) $(NET_PROTOCOL_OBJ) $(NET_CLIENT_OBJ) $(NET_SERVER_OBJ) $(FS_SCANNER_OBJ) $(FS_METADATA_OBJ) $(FS_FILE_READER_OBJ) $(REPO_OBJ) $(CHUNK_STORE_OBJ) $(INDEX_STORE_OBJ) $(SNAPSHOT_STORE_OBJ) $(ENGINE_OBJ) $(PLANNER_OBJ) $(JOURNAL_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+
+$(BIN_DIR)/benchmark_hash$(EXE_EXT): $(BENCHMARK_HASH_OBJ) $(HASH_OBJ) $(KDF_OBJ) $(MEMORY_OBJ) $(IO_UTILS_OBJ)
+>@$(call MKDIR,$(BIN_DIR))
+>$(CC) $(BENCHMARK_HASH_OBJ) $(HASH_OBJ) $(KDF_OBJ) $(MEMORY_OBJ) $(IO_UTILS_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+
+$(BIN_DIR)/corrupt_chunk$(EXE_EXT): $(CORRUPT_CHUNK_OBJ) $(HASH_OBJ) $(KDF_OBJ) $(MEMORY_OBJ) $(PATH_OBJ) $(IO_UTILS_OBJ)
+>@$(call MKDIR,$(BIN_DIR))
+>$(CC) $(CORRUPT_CHUNK_OBJ) $(HASH_OBJ) $(KDF_OBJ) $(MEMORY_OBJ) $(PATH_OBJ) $(IO_UTILS_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
+
+$(BIN_DIR)/gen_test_tree$(EXE_EXT): $(GEN_TEST_TREE_OBJ) $(PATH_OBJ) $(IO_UTILS_OBJ)
+>@$(call MKDIR,$(BIN_DIR))
+>$(CC) $(GEN_TEST_TREE_OBJ) $(PATH_OBJ) $(IO_UTILS_OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(BUILD_DIR)/main.o: $(SRC_BOOTSTRAP)
 >@$(call MKDIR,$(BUILD_DIR))
@@ -224,6 +242,18 @@ $(BUILD_DIR)/test_main.o: $(TEST_MAIN) tests/integration/test_support.h tests/un
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/benchmark_hash.o: tools/benchmark_hash.c include/delta/hash.h include/util/io_utils.h include/common/constants.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/corrupt_chunk.o: tools/corrupt_chunk.c include/delta/hash.h include/common/path.h include/util/io_utils.h include/common/constants.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/gen_test_tree.o: tools/gen_test_tree.c include/common/path.h include/util/io_utils.h include/common/constants.h
+>@$(call MKDIR,$(BUILD_DIR))
+>$(CC) $(CFLAGS) -c $< -o $@
+
 clean:
 >@$(call RM_DIR,$(BUILD_DIR))
 >@$(call RM_DIR,$(BIN_DIR))
@@ -237,9 +267,10 @@ help:
 >@echo   make asan     - Build with ASan and UBSan
 >@echo   make test     - Build and run bootstrap tests
 >@echo   make run      - Build release and run app
+>@echo   make tools    - Build the utility programs in tools/
 >@echo   make clean    - Remove build and bin output
 >@echo   make help     - Show this help message
 >@echo.
 >@echo Notes:
 >@echo   On Windows use mingw32-make if make is unavailable.
->@echo   This Makefile currently compiles src/main.c and tests/test_main.c.
+>@echo   This Makefile currently compiles src/main.c and tests/main_test.c.

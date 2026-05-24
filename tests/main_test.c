@@ -68,4 +68,3 @@ int main(void) {
 	printf("[FAIL] %lu test(s) failed\n", (unsigned long)failures);
 	return 1;
 }
-
