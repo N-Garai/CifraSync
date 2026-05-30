@@ -384,7 +384,9 @@ int cs_engine_init(void) {
 	return 0;
 }
 
-int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run, int compress, int encrypt, const char *label) {
+int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run, int compress, int encrypt, const char *label,
+					 const char *const *include_patterns, size_t include_count,
+					 const char *const *exclude_patterns, size_t exclude_count) {
 	cs_manifest_t manifest;
 	cs_repo_t repo;
 	cs_chunk_store_t *chunk_store = NULL;
@@ -392,6 +394,7 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 	cs_snapshot_store_t *snapshot_store = NULL;
 	cs_snapshot_t snapshot;
 	cs_engine_backup_ctx_t backup_ctx;
+	cs_fs_scan_options_t scan_opts;
 	char manifest_path[CS_PATH_CAP];
 	char journal_record[CS_PATH_CAP * 2U];
 	int status;
@@ -401,8 +404,10 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 		return -1;
 	}
 
-	CS_LOG_INFO("engine: starting backup source=%s repo=%s dry_run=%d compress=%d encrypt=%d label=%s",
-				 source_path, repo_path, dry_run, compress, encrypt, label ? label : "");
+	CS_LOG_INFO("engine: starting backup source=%s repo=%s dry_run=%d compress=%d encrypt=%d label=%s "
+				"include_count=%lu exclude_count=%lu",
+				 source_path, repo_path, dry_run, compress, encrypt, label ? label : "",
+				 (unsigned long)include_count, (unsigned long)exclude_count);
 
 	if (compress != 0) {
 		CS_LOG_WARN("engine: compression flag is recorded but not applied by this engine build");
@@ -449,7 +454,13 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 		backup_ctx.index_store = index_store;
 	}
 
-	status = cs_fs_scan(source_path, NULL, cs_engine_scan_visit, &backup_ctx);
+	cs_fs_scan_options_default(&scan_opts);
+	scan_opts.include_patterns = include_patterns;
+	scan_opts.include_count = include_count;
+	scan_opts.exclude_patterns = exclude_patterns;
+	scan_opts.exclude_count = exclude_count;
+
+	status = cs_fs_scan(source_path, &scan_opts, cs_engine_scan_visit, &backup_ctx);
 	if (status != 0) {
 		cs_chunk_store_close(chunk_store);
 		cs_index_store_close(index_store);

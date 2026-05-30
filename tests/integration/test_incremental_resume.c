@@ -32,7 +32,7 @@ int cs_integration_test_incremental_resume(void) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("repo initialization failed");
 	}
-	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-incremental-1") != 0) {
+	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-incremental-1", NULL, 0U, NULL, 0U) != 0) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("first backup failed");
 	}
@@ -44,7 +44,7 @@ int cs_integration_test_incremental_resume(void) {
 
 	Sleep(1100);
 
-	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-incremental-2") != 0) {
+	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-incremental-2", NULL, 0U, NULL, 0U) != 0) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("second backup failed");
 	}

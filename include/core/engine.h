@@ -7,8 +7,9 @@ extern "C" {
 
 #include <stddef.h>
 
-/* High-level engine API for backup and restore orchestration. */
-int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run, int compress, int encrypt, const char *label);
+int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run, int compress, int encrypt, const char *label,
+					 const char *const *include_patterns, size_t include_count,
+					 const char *const *exclude_patterns, size_t exclude_count);
 int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char *out_path);
 
 int cs_engine_init(void);
@@ -18,4 +19,3 @@ int cs_engine_init(void);
 #endif
 
 #endif
-

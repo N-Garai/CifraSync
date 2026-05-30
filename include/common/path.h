@@ -15,4 +15,9 @@ const char *cs_path_basename(const char *path);
 int cs_path_dirname(const char *path, char *out, size_t out_size);
 bool cs_path_has_parent_reference(const char *path);
 
+int cs_path_match_glob(const char *pattern, const char *path);
+
+int cs_path_load_patterns_file(const char *filepath, char ***patterns_out, size_t *count_out);
+void cs_path_free_patterns(char **patterns, size_t count);
+
 #endif

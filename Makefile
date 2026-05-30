@@ -122,7 +122,7 @@ $(BUILD_DIR)/main.o: $(SRC_BOOTSTRAP)
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/commands.o: src/cli/commands.c include/cli/commands.h include/cli/parser.h
+$(BUILD_DIR)/commands.o: src/cli/commands.c include/cli/commands.h include/cli/parser.h include/core/engine.h include/common/path.h include/common/constants.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
@@ -134,7 +134,7 @@ $(BUILD_DIR)/log.o: src/common/log.c include/common/log.h include/common/constan
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/path.o: src/common/path.c include/common/path.h
+$(BUILD_DIR)/path.o: src/common/path.c include/common/path.h include/common/constants.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
@@ -198,7 +198,7 @@ $(BUILD_DIR)/net_server.o: src/net/server.c include/net/server.h include/net/pro
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/fs_scanner.o: src/fs/scanner.c include/fs/scanner.h include/fs/metadata.h include/common/path.h include/common/memory.h
+$(BUILD_DIR)/fs_scanner.o: src/fs/scanner.c include/fs/scanner.h include/fs/metadata.h include/common/path.h include/common/memory.h include/common/constants.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 

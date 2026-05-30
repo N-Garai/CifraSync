@@ -1,6 +1,9 @@
 #include "common/path.h"
+#include "common/constants.h"
 
 #include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int is_sep(char ch) {
@@ -233,4 +236,119 @@ bool cs_path_has_parent_reference(const char *path) {
 	}
 
 	return false;
+}
+
+int cs_path_match_glob(const char *pattern, const char *path) {
+	const char *p = pattern;
+	const char *s = path;
+
+	while (*p != '\0') {
+		if (*p == '*') {
+			p++;
+			if (*p == '\0') {
+				return 1;
+			}
+			while (*s != '\0') {
+				if (cs_path_match_glob(p, s) != 0) {
+					return 1;
+				}
+				s++;
+			}
+			return 0;
+		} else if (*p == '?') {
+			if (*s == '\0' || is_sep(*s)) {
+				return 0;
+			}
+			p++;
+			s++;
+		} else {
+			if (*p != *s) {
+				return 0;
+			}
+			p++;
+			s++;
+		}
+	}
+
+	return (*s == '\0') ? 1 : 0;
+}
+
+int cs_path_load_patterns_file(const char *filepath, char ***patterns_out, size_t *count_out) {
+	FILE *f;
+	char line[CS_PATH_CAP];
+	size_t cap = 0U;
+	size_t cnt = 0U;
+	char **patterns = NULL;
+
+	if (filepath == NULL || patterns_out == NULL || count_out == NULL) {
+		return -1;
+	}
+
+	*patterns_out = NULL;
+	*count_out = 0U;
+
+	f = fopen(filepath, "rb");
+	if (f == NULL) {
+		return -1;
+	}
+
+	while (fgets(line, (int)sizeof(line), f) != NULL) {
+		size_t len;
+
+		len = strlen(line);
+		while (len > 0U && (line[len - 1U] == '\n' || line[len - 1U] == '\r')) {
+			line[len - 1U] = '\0';
+			len--;
+		}
+
+		if (len == 0U || line[0] == '#') {
+			continue;
+		}
+
+		if (cnt >= cap) {
+			size_t new_cap = (cap == 0U) ? 16U : cap * 2U;
+			char **tmp = (char **)realloc(patterns, new_cap * sizeof(char *));
+			if (tmp == NULL) {
+				while (cnt > 0U) {
+					cnt--;
+					free(patterns[cnt]);
+				}
+				free(patterns);
+				fclose(f);
+				return -1;
+			}
+			patterns = tmp;
+			cap = new_cap;
+		}
+
+		patterns[cnt] = (char *)malloc(len + 1U);
+		if (patterns[cnt] == NULL) {
+			while (cnt > 0U) {
+				cnt--;
+				free(patterns[cnt]);
+			}
+			free(patterns);
+			fclose(f);
+			return -1;
+		}
+		memcpy(patterns[cnt], line, len + 1U);
+		cnt++;
+	}
+
+	fclose(f);
+
+	*patterns_out = patterns;
+	*count_out = cnt;
+	return 0;
+}
+
+void cs_path_free_patterns(char **patterns, size_t count) {
+	if (patterns == NULL) {
+		return;
+	}
+	while (count > 0U) {
+		count--;
+		free(patterns[count]);
+	}
+	free(patterns);
 }

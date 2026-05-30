@@ -26,6 +26,8 @@ typedef struct {
 	const char *label;
 	const char *keep_last;
 	const char *older_than;
+	const char *include_file;
+	const char *exclude_file;
 	int dry_run;
 	int compress;
 	int encrypt;

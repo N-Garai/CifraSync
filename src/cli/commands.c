@@ -1,6 +1,9 @@
 #include "cli/commands.h"
 #include "cli/parser.h"
 
+#include "core/engine.h"
+#include "common/path.h"
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -119,8 +122,9 @@ void cs_print_help(void) {
 	puts("Command options:");
 	puts("  init     --repo PATH");
 	puts("  backup   --source PATH --repo PATH [--dry-run] [--compress] [--encrypt] [--label TEXT]");
+	puts("           [--include-file FILE] [--exclude-file FILE]");
 	puts("  list     --repo PATH");
-	puts("  restore  --repo PATH --snapshot ID --out PATH [--source-file PATH]");
+	puts("  restore  --repo PATH --snapshot ID --out PATH");
 	puts("  verify   --repo PATH");
 	puts("  prune    --repo PATH [--keep-last N] [--older-than DAYS]");
 	puts("  sync     --repo PATH --remote HOST:PORT");
@@ -196,35 +200,87 @@ static int handle_list(const cs_cli_options_t *options) {
 	return CS_OK;
 }
 
-static int handle_not_implemented(const cs_cli_options_t *options) {
-	const char *name = cs_command_to_string(options->command);
+static int handle_backup(const cs_cli_options_t *options) {
+	char **include_patterns = NULL;
+	char **exclude_patterns = NULL;
+	size_t include_count = 0U;
+	size_t exclude_count = 0U;
+	int result;
 
-	switch (options->command) {
-		case CS_CMD_BACKUP:
-			if (is_required_missing(options->repo) || is_required_missing(options->source)) {
-				fprintf(stderr, "backup requires --source PATH and --repo PATH\n");
-				return CS_ERR_USAGE;
-			}
-			break;
-		case CS_CMD_RESTORE:
-			if (is_required_missing(options->repo) || is_required_missing(options->snapshot) || is_required_missing(options->output)) {
-				fprintf(stderr, "restore requires --repo PATH --snapshot ID --out PATH\n");
-				return CS_ERR_USAGE;
-			}
-			break;
-		case CS_CMD_VERIFY:
-		case CS_CMD_PRUNE:
-		case CS_CMD_SYNC:
-			if (is_required_missing(options->repo)) {
-				fprintf(stderr, "%s requires --repo PATH\n", name);
-				return CS_ERR_USAGE;
-			}
-			break;
-		default:
-			break;
+	if (is_required_missing(options->repo) || is_required_missing(options->source)) {
+		fprintf(stderr, "backup requires --source PATH and --repo PATH\n");
+		return CS_ERR_USAGE;
 	}
 
-	fprintf(stderr, "%s is parsed correctly but not yet wired to the storage engine.\n", name);
+	if (options->include_file != NULL) {
+		if (cs_path_load_patterns_file(options->include_file, &include_patterns, &include_count) != 0) {
+			fprintf(stderr, "warning: failed to load include patterns from %s\n", options->include_file);
+		} else {
+			printf("Loaded %lu include patterns from %s\n", (unsigned long)include_count, options->include_file);
+		}
+	}
+
+	if (options->exclude_file != NULL) {
+		if (cs_path_load_patterns_file(options->exclude_file, &exclude_patterns, &exclude_count) != 0) {
+			fprintf(stderr, "warning: failed to load exclude patterns from %s\n", options->exclude_file);
+		} else {
+			printf("Loaded %lu exclude patterns from %s\n", (unsigned long)exclude_count, options->exclude_file);
+		}
+	}
+
+	result = cs_engine_backup(options->source, options->repo,
+							  options->dry_run, options->compress, options->encrypt, options->label,
+							  (const char *const *)include_patterns, include_count,
+							  (const char *const *)exclude_patterns, exclude_count);
+
+	cs_path_free_patterns(include_patterns, include_count);
+	cs_path_free_patterns(exclude_patterns, exclude_count);
+
+	if (result != 0) {
+		fprintf(stderr, "backup failed\n");
+		return CS_ERR_INVALID;
+	}
+	printf("Backup complete.\n");
+	return CS_OK;
+}
+
+static int handle_restore(const cs_cli_options_t *options) {
+	if (is_required_missing(options->repo) || is_required_missing(options->snapshot) || is_required_missing(options->output)) {
+		fprintf(stderr, "restore requires --repo PATH --snapshot ID --out PATH\n");
+		return CS_ERR_USAGE;
+	}
+	if (cs_engine_restore(options->repo, options->snapshot, options->output) != 0) {
+		fprintf(stderr, "restore failed\n");
+		return CS_ERR_INVALID;
+	}
+	printf("Restore complete.\n");
+	return CS_OK;
+}
+
+static int handle_verify(const cs_cli_options_t *options) {
+	if (is_required_missing(options->repo)) {
+		fprintf(stderr, "verify requires --repo PATH\n");
+		return CS_ERR_USAGE;
+	}
+	fprintf(stderr, "verify is parsed correctly but not yet wired to the storage engine.\n");
+	return CS_ERR_UNSUPPORTED;
+}
+
+static int handle_prune(const cs_cli_options_t *options) {
+	if (is_required_missing(options->repo)) {
+		fprintf(stderr, "prune requires --repo PATH\n");
+		return CS_ERR_USAGE;
+	}
+	fprintf(stderr, "prune is parsed correctly but not yet wired to the storage engine.\n");
+	return CS_ERR_UNSUPPORTED;
+}
+
+static int handle_sync(const cs_cli_options_t *options) {
+	if (is_required_missing(options->repo) || is_required_missing(options->remote)) {
+		fprintf(stderr, "sync requires --repo PATH --remote HOST:PORT\n");
+		return CS_ERR_USAGE;
+	}
+	fprintf(stderr, "sync is parsed correctly but not yet wired to the storage engine.\n");
 	return CS_ERR_UNSUPPORTED;
 }
 
@@ -257,11 +313,15 @@ int cs_run(int argc, char **argv) {
 		case CS_CMD_LIST:
 			return handle_list(&options);
 		case CS_CMD_BACKUP:
+			return handle_backup(&options);
 		case CS_CMD_RESTORE:
+			return handle_restore(&options);
 		case CS_CMD_VERIFY:
+			return handle_verify(&options);
 		case CS_CMD_PRUNE:
+			return handle_prune(&options);
 		case CS_CMD_SYNC:
-			return handle_not_implemented(&options);
+			return handle_sync(&options);
 		default:
 			fprintf(stderr, "Unknown command.\n");
 			return CS_ERR_USAGE;

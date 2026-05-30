@@ -1,0 +1,69 @@
+# CifraSync exclude patterns sample
+# Lines starting with # are comments.
+# Files matching ANY exclude pattern are skipped.
+# Exclude patterns take priority over include patterns.
+#
+# Pattern syntax:
+#   *          matches any sequence of characters (except path separator)
+#   ?          matches any single character (except path separator)
+#   dir/       matches only directories named "dir"
+#   /pattern   anchors pattern to root of source tree
+
+# Build and dependency directories
+build/
+bin/
+obj/
+node_modules/
+vendor/
+third_party/
+__pycache__/
+*.egg-info/
+
+# Version control directories
+.git/
+.svn/
+.hg/
+.cvs/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Log and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.old
+*.orig
+
+# Compiled objects and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+
+# Large media files (usually not backed up)
+*.mp4
+*.avi
+*.mkv
+*.iso
+*.zip
+*.tar
+*.gz
+*.rar
+
+# Cache and coverage
+.coverage
+coverage/
+.cache/
+*.pyc

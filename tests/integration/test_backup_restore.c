@@ -39,7 +39,7 @@ int cs_integration_test_backup_restore(void) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("repo initialization failed");
 	}
-	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-backup-restore") != 0) {
+	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-backup-restore", NULL, 0U, NULL, 0U) != 0) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("backup failed");
 	}

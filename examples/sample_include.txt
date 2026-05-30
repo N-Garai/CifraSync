@@ -1,0 +1,43 @@
+# CifraSync include patterns sample
+# Lines starting with # are comments.
+# Only files matching ANY include pattern are backed up.
+# If this file is empty or not specified, all files are included.
+#
+# Pattern syntax:
+#   *       matches any sequence of characters (except path separator)
+#   ?       matches any single character (except path separator)
+#   dir/    matches only directories named "dir"
+#   /pattern  anchors pattern to root of source tree
+
+# Include only source code files
+*.c
+*.h
+*.cpp
+*.hpp
+
+# Include documentation
+*.md
+*.txt
+*.rst
+
+# Include build/config files
+*.json
+*.yaml
+*.yml
+*.toml
+*.cfg
+*.ini
+
+# Include shell and script files
+*.sh
+*.py
+*.js
+*.ts
+*.pl
+*.rb
+
+# Include Makefile and similar
+Makefile*
+CMakeLists.txt
+Dockerfile*
+*.mk

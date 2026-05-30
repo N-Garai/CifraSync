@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Initialize CLI options structure to defaults */
 void cs_cli_options_init(cs_cli_options_t *options) {
 	if (options == NULL) {
 		return;
@@ -14,7 +13,6 @@ void cs_cli_options_init(cs_cli_options_t *options) {
 	options->command = CS_CMD_NONE;
 }
 
-/* Convert command enum to string representation */
 const char *cs_command_to_string(cs_command_t command) {
 	switch (command) {
 		case CS_CMD_HELP: return "help";
@@ -30,12 +28,10 @@ const char *cs_command_to_string(cs_command_t command) {
 	}
 }
 
-/* Check if a string is missing or empty */
 static int is_required_missing(const char *value) {
 	return value == NULL || value[0] == '\0';
 }
 
-/* Parse a command token from argv */
 static cs_command_t parse_command_token(const char *token) {
 	if (token == NULL) {
 		return CS_CMD_NONE;
@@ -56,7 +52,6 @@ static cs_command_t parse_command_token(const char *token) {
 	return CS_CMD_NONE;
 }
 
-/* Set error message in buffer */
 static int set_error(char *error_buffer, size_t error_buffer_size, const char *message) {
 	if (error_buffer != NULL && error_buffer_size > 0) {
 		snprintf(error_buffer, error_buffer_size, "%s", message);
@@ -64,7 +59,6 @@ static int set_error(char *error_buffer, size_t error_buffer_size, const char *m
 	return -1;
 }
 
-/* Check that an option has a non-empty value */
 static int require_value(const char *option_name, const char *value, char *error_buffer, size_t error_buffer_size) {
 	char message[128];
 	if (!is_required_missing(value)) {
@@ -74,7 +68,6 @@ static int require_value(const char *option_name, const char *value, char *error
 	return set_error(error_buffer, error_buffer_size, message);
 }
 
-/* Parse command-line arguments into options structure */
 int cs_parse_cli(int argc, char **argv, cs_cli_options_t *options, char *error_buffer, size_t error_buffer_size) {
 	int i;
 	if (options == NULL) {
@@ -181,6 +174,22 @@ int cs_parse_cli(int argc, char **argv, cs_cli_options_t *options, char *error_b
 				return -1;
 			}
 			options->older_than = value;
+			++i;
+			continue;
+		}
+		if (strcmp(arg, "--include-file") == 0) {
+			if (require_value(arg, value, error_buffer, error_buffer_size) != 0) {
+				return -1;
+			}
+			options->include_file = value;
+			++i;
+			continue;
+		}
+		if (strcmp(arg, "--exclude-file") == 0) {
+			if (require_value(arg, value, error_buffer, error_buffer_size) != 0) {
+				return -1;
+			}
+			options->exclude_file = value;
 			++i;
 			continue;
 		}
