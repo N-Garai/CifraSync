@@ -31,7 +31,7 @@ int cs_journal_flush(const char *repo_path) {
 }
 
 int cs_journal_replay(const char *repo_path, int (*cb)(const char *line, void *ctx), void *ctx) {
-    if (!repo_path || !cb) return -1;
+    if (!repo_path) return -1;
     const char *p = make_journal_path(repo_path);
     FILE *f = fopen(p, "r");
     if (!f) return -1;
@@ -39,8 +39,11 @@ int cs_journal_replay(const char *repo_path, int (*cb)(const char *line, void *c
     while (fgets(buf, sizeof(buf), f)) {
         size_t l = strlen(buf);
         if (l && buf[l-1] == '\n') buf[l-1] = '\0';
-        if (cb(buf, ctx) != 0) break;
+        if (cb && cb(buf, ctx) != 0) break;
     }
     fclose(f);
+    /* Truncate journal after replay so repeated calls don't replay same records */
+    f = fopen(p, "wb");
+    if (f) fclose(f);
     return 0;
 }

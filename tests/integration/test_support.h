@@ -20,6 +20,7 @@
 #include <string.h>
 #include <errno.h>
 #include <stdint.h>
+#include <time.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -125,10 +126,17 @@ static int cs_it_make_temp_root(const char *prefix, char *out, size_t out_size) 
 
 	return cs_it_make_dirs(out);
 #else
-	(void)prefix;
-	(void)out;
-	(void)out_size;
-	return -1;
+	char template[CS_IT_PATH_CAP];
+	const char *tmp = getenv("TMPDIR");
+	if (tmp == NULL) tmp = getenv("TMP");
+	if (tmp == NULL) tmp = "/tmp";
+	long pid = (long)getpid();
+	unsigned long ticks = (unsigned long)time(NULL);
+	if (snprintf(template, sizeof(template), "%s/cifrasync_%s_%ld_%lu", tmp, prefix, pid, ticks) < 0) return -1;
+	if (cs_it_make_dirs(template) != 0) return -1;
+	strncpy(out, template, out_size - 1);
+	out[out_size - 1] = '\0';
+	return 0;
 #endif
 }
 
@@ -475,9 +483,24 @@ static int cs_it_find_latest_snapshot_stem(const char *repo_path, char *out, siz
 		FindClose(handle);
 	}
 #else
-	(void)best_time;
-	(void)found;
-	return -1;
+	DIR *dir = opendir(snapshots_dir);
+	if (dir == NULL) return -1;
+	struct dirent *entry;
+	time_t best_ts = 0;
+	while ((entry = readdir(dir)) != NULL) {
+		if (strstr(entry->d_name, ".snapshot") == NULL) continue;
+		char full_path[CS_IT_PATH_CAP];
+		struct stat st;
+		cs_it_join_path(full_path, sizeof(full_path), snapshots_dir, entry->d_name);
+		if (stat(full_path, &st) != 0) continue;
+		if (!found || st.st_mtime > best_ts) {
+			best_ts = st.st_mtime;
+			strncpy(best_name, entry->d_name, sizeof(best_name) - 1U);
+			best_name[sizeof(best_name) - 1U] = '\0';
+			found = 1;
+		}
+	}
+	closedir(dir);
 #endif
 
 	if (!found) {

@@ -3,29 +3,43 @@
 #include "common/constants.h"
 #include "common/log.h"
 #include "common/path.h"
+#include "compress/codec.h"
 #include "core/journal.h"
+#include "crypto/cipher.h"
 #include "delta/chunker.h"
+#include "delta/hash.h"
 #include "delta/manifest.h"
 #include "fs/file_reader.h"
 #include "fs/metadata.h"
 #include "fs/scanner.h"
+#include "net/client.h"
+#include "net/protocol.h"
 #include "storage/chunk_store.h"
 #include "storage/index_store.h"
 #include "storage/repo.h"
 #include "storage/snapshot_store.h"
+#include "util/config.h"
+#include "util/io_utils.h"
+#include "util/time_utils.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#include <direct.h>
+#define cs_engine_mkdir(path) _mkdir(path)
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#define cs_engine_mkdir(path) mkdir(path, 0755)
+#endif
 
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#include <direct.h>
-#define cs_engine_mkdir(path) _mkdir(path)
-#else
-#include <sys/stat.h>
-#define cs_engine_mkdir(path) mkdir(path, 0755)
-#endif
+#include <ctype.h>
+#include <time.h>
 
 typedef struct cs_engine_backup_ctx {
 	const char *source_root;
@@ -34,6 +48,9 @@ typedef struct cs_engine_backup_ctx {
 	cs_index_store_t *index_store;
 	cs_chunker_t chunker;
 	int dry_run;
+	int compress;
+	int encrypt;
+	const char *passphrase;
 	size_t file_count;
 	unsigned long long total_bytes;
 	unsigned long long total_chunks;
@@ -193,6 +210,9 @@ static int cs_engine_chunk_visit(const cs_chunk_slice_t *slice, const unsigned c
 	cs_engine_chunk_ctx_t *chunk_ctx;
 	char chunk_location[CS_PATH_CAP];
 	char hash_prefix[3];
+	unsigned char *store_data = NULL;
+	size_t store_size = 0U;
+	int free_store_data = 0;
 
 	if (slice == NULL || ctx == NULL) {
 		return -1;
@@ -212,18 +232,49 @@ static int cs_engine_chunk_visit(const cs_chunk_slice_t *slice, const unsigned c
 		return 0;
 	}
 
+	if (chunk_ctx->backup->compress) {
+		unsigned char *compressed = NULL;
+		size_t compressed_size = 0U;
+		if (cs_codec_compress_alloc(CS_CODEC_RLE, chunk_data, slice->size, &compressed, &compressed_size) != 0) {
+			return -1;
+		}
+		store_data = compressed;
+		store_size = compressed_size;
+		free_store_data = 1;
+	} else {
+		store_data = (unsigned char *)chunk_data;
+		store_size = slice->size;
+	}
+
+	if (chunk_ctx->backup->encrypt && chunk_ctx->backup->passphrase != NULL) {
+		unsigned char *encrypted = NULL;
+		size_t encrypted_size = 0U;
+		if (cs_cipher_seal_alloc(chunk_ctx->backup->passphrase, store_data, store_size, &encrypted, &encrypted_size) != 0) {
+			if (free_store_data) free(store_data);
+			return -1;
+		}
+		if (free_store_data) free(store_data);
+		store_data = encrypted;
+		store_size = encrypted_size;
+		free_store_data = 1;
+	}
+
 	hash_prefix[0] = slice->hash_hex[0];
 	hash_prefix[1] = slice->hash_hex[1];
 	hash_prefix[2] = '\0';
 	if (snprintf(chunk_location, sizeof(chunk_location), "chunks%c%s%c%s", cs_path_separator(), hash_prefix, cs_path_separator(), slice->hash_hex) < 0) {
+		if (free_store_data) free(store_data);
 		return -1;
 	}
 
 	if (!cs_chunk_store_exists(chunk_ctx->backup->chunk_store, slice->hash_hex)) {
-		if (cs_chunk_store_put(chunk_ctx->backup->chunk_store, slice->hash_hex, chunk_data, slice->size) != 0) {
+		if (cs_chunk_store_put(chunk_ctx->backup->chunk_store, slice->hash_hex, store_data, store_size) != 0) {
+			if (free_store_data) free(store_data);
 			return -1;
 		}
 	}
+
+	if (free_store_data) free(store_data);
 
 	if (cs_index_store_insert(chunk_ctx->backup->index_store, slice->hash_hex, chunk_location) != 0) {
 		return -1;
@@ -318,7 +369,7 @@ static int cs_engine_write_restore_file(const char *out_root, const char *relati
 	return cs_file_write_all(destination, data, size);
 }
 
-static int cs_engine_restore_file(cs_chunk_store_t *chunk_store, const cs_manifest_file_t *file, const char *out_root) {
+static int cs_engine_restore_file_internal(cs_chunk_store_t *chunk_store, const cs_manifest_file_t *file, const char *out_root) {
 	unsigned char *buffer = NULL;
 	size_t file_size;
 	size_t chunk_index;
@@ -351,14 +402,33 @@ static int cs_engine_restore_file(cs_chunk_store_t *chunk_store, const cs_manife
 			break;
 		}
 
-		if (chunk_size != chunk->size || buffer == NULL || chunk->offset + chunk_size > file_size) {
-			free(chunk_data);
-			status = -1;
-			break;
-		}
+		{
+			unsigned char *raw_data = chunk_data;
+			size_t raw_size = chunk_size;
 
-		memcpy(buffer + chunk->offset, chunk_data, chunk_size);
-		free(chunk_data);
+			{
+				unsigned char *decompressed = NULL;
+				size_t decompressed_size = 0U;
+				if (cs_codec_decompress_alloc(CS_CODEC_RLE, raw_data, raw_size, &decompressed, &decompressed_size) == 0) {
+					if (decompressed_size == chunk->size) {
+						free(raw_data);
+						raw_data = decompressed;
+						raw_size = decompressed_size;
+					} else {
+						free(decompressed);
+					}
+				}
+			}
+
+			if (raw_size != chunk->size || buffer == NULL || chunk->offset + raw_size > file_size) {
+				free(raw_data);
+				status = -1;
+				break;
+			}
+
+			memcpy(buffer + chunk->offset, raw_data, raw_size);
+			free(raw_data);
+		}
 	}
 
 	if (status == 0) {
@@ -379,6 +449,612 @@ static int cs_engine_restore_manifest(const char *repo_path, const char *snapsho
 	return cs_manifest_load(manifest_path, manifest);
 }
 
+#ifdef _WIN32
+static int cs_engine_orphan_gc_win32(const char *repo_path, cs_snapshot_t *snapshots, size_t snapshot_count,
+									 const char *chunks_dir, unsigned long *total_scanned, unsigned long *total_removed) {
+	char pattern[CS_PATH_CAP];
+	WIN32_FIND_DATAA find_data;
+	HANDLE handle;
+
+	if (snprintf(pattern, sizeof(pattern), "%s\\*", chunks_dir) < 0) return -1;
+	handle = FindFirstFileA(pattern, &find_data);
+	if (handle == INVALID_HANDLE_VALUE) return 0;
+
+	do {
+		char prefix_dir[CS_PATH_CAP];
+		char chunk_pattern[CS_PATH_CAP];
+		WIN32_FIND_DATAA chunk_data;
+		HANDLE chunk_handle;
+
+		if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0U) continue;
+		if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0) continue;
+		if (strlen(find_data.cFileName) != 2) continue;
+
+		cs_engine_join(prefix_dir, sizeof(prefix_dir), chunks_dir, find_data.cFileName);
+		if (snprintf(chunk_pattern, sizeof(chunk_pattern), "%s\\*", prefix_dir) < 0) continue;
+
+		chunk_handle = FindFirstFileA(chunk_pattern, &chunk_data);
+		if (chunk_handle == INVALID_HANDLE_VALUE) continue;
+
+		do {
+			char chunk_path[CS_PATH_CAP];
+			char hash_hex[CS_HASH_HEX_BUFSZ];
+			int referenced = 0;
+
+			if ((chunk_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) continue;
+			if (strcmp(chunk_data.cFileName, ".") == 0 || strcmp(chunk_data.cFileName, "..") == 0) continue;
+
+			(*total_scanned)++;
+			cs_engine_join(chunk_path, sizeof(chunk_path), prefix_dir, chunk_data.cFileName);
+			strncpy(hash_hex, chunk_data.cFileName, sizeof(hash_hex) - 1);
+			hash_hex[sizeof(hash_hex) - 1] = '\0';
+
+			for (size_t si = 0U; si < snapshot_count && !referenced; ++si) {
+				char manifest_path[CS_PATH_CAP];
+				cs_manifest_t manifest;
+				if (cs_manifest_init(&manifest) != 0) continue;
+				if (cs_engine_snapshot_artifact_path(repo_path, snapshots[si].id, ".manifest", manifest_path, sizeof(manifest_path)) == 0 &&
+					cs_manifest_load(manifest_path, &manifest) == 0) {
+					for (size_t fi = 0U; fi < manifest.file_count && !referenced; ++fi)
+						for (size_t ci = 0U; ci < manifest.files[fi].chunk_count && !referenced; ++ci)
+							if (strcmp(manifest.files[fi].chunks[ci].hash_hex, hash_hex) == 0)
+								referenced = 1;
+				}
+				cs_manifest_free(&manifest);
+			}
+
+			if (!referenced && remove(chunk_path) == 0) (*total_removed)++;
+		} while (FindNextFileA(chunk_handle, &chunk_data) != 0);
+		FindClose(chunk_handle);
+	} while (FindNextFileA(handle, &find_data) != 0);
+	FindClose(handle);
+	return 0;
+}
+#else
+static int cs_engine_orphan_gc_posix(const char *repo_path, cs_snapshot_t *snapshots, size_t snapshot_count,
+									 const char *chunks_dir, unsigned long *total_scanned, unsigned long *total_removed) {
+	DIR *dir = opendir(chunks_dir);
+	if (dir == NULL) return 0;
+
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+		if (strlen(entry->d_name) != 2) continue;
+
+		char prefix_dir[CS_PATH_CAP];
+		cs_engine_join(prefix_dir, sizeof(prefix_dir), chunks_dir, entry->d_name);
+
+		DIR *cdir = opendir(prefix_dir);
+		if (cdir == NULL) continue;
+
+		struct dirent *centry;
+		while ((centry = readdir(cdir)) != NULL) {
+			char chunk_path[CS_PATH_CAP];
+			char hash_hex[CS_HASH_HEX_BUFSZ];
+			int referenced = 0;
+
+			if (strcmp(centry->d_name, ".") == 0 || strcmp(centry->d_name, "..") == 0) continue;
+
+			(*total_scanned)++;
+			cs_engine_join(chunk_path, sizeof(chunk_path), prefix_dir, centry->d_name);
+			strncpy(hash_hex, centry->d_name, sizeof(hash_hex) - 1);
+			hash_hex[sizeof(hash_hex) - 1] = '\0';
+
+			for (size_t si = 0U; si < snapshot_count && !referenced; ++si) {
+				char manifest_path[CS_PATH_CAP];
+				cs_manifest_t manifest;
+				if (cs_manifest_init(&manifest) != 0) continue;
+				if (cs_engine_snapshot_artifact_path(repo_path, snapshots[si].id, ".manifest", manifest_path, sizeof(manifest_path)) == 0 &&
+					cs_manifest_load(manifest_path, &manifest) == 0) {
+					for (size_t fi = 0U; fi < manifest.file_count && !referenced; ++fi)
+						for (size_t ci = 0U; ci < manifest.files[fi].chunk_count && !referenced; ++ci)
+							if (strcmp(manifest.files[fi].chunks[ci].hash_hex, hash_hex) == 0)
+								referenced = 1;
+				}
+				cs_manifest_free(&manifest);
+			}
+
+			if (!referenced && remove(chunk_path) == 0) (*total_removed)++;
+		}
+		closedir(cdir);
+	}
+	closedir(dir);
+	return 0;
+}
+#endif
+
+static int cs_engine_orphan_gc(const char *repo_path) {
+	char chunks_dir[CS_PATH_CAP];
+	cs_snapshot_store_t *snapshot_store = NULL;
+	cs_snapshot_t *snapshots = NULL;
+	size_t snapshot_count = 0U;
+	unsigned long total_removed = 0UL;
+	unsigned long total_scanned = 0UL;
+
+	if (cs_engine_join(chunks_dir, sizeof(chunks_dir), repo_path, "chunks") != 0) {
+		return -1;
+	}
+
+	snapshot_store = cs_snapshot_store_open(repo_path);
+	if (snapshot_store == NULL) return -1;
+
+	cs_snapshot_store_list(snapshot_store, &snapshots, &snapshot_count);
+
+#ifdef _WIN32
+	cs_engine_orphan_gc_win32(repo_path, snapshots, snapshot_count, chunks_dir, &total_scanned, &total_removed);
+#else
+	cs_engine_orphan_gc_posix(repo_path, snapshots, snapshot_count, chunks_dir, &total_scanned, &total_removed);
+#endif
+
+	free(snapshots);
+	cs_snapshot_store_close(snapshot_store);
+
+	CS_LOG_INFO("engine: orphan GC scanned=%lu removed=%lu", (unsigned long)total_scanned, (unsigned long)total_removed);
+	return 0;
+}
+
+static void cs_engine_verify_snapshot(const cs_manifest_t *manifest, const char *snapshot_id, cs_chunk_store_t *chunk_store,
+									  unsigned long *total_files, unsigned long *total_chunks,
+									  unsigned long *corrupt_chunks, unsigned long *missing_chunks);
+
+#ifdef _WIN32
+static int cs_engine_do_verify_win32(const char *snapshots_dir, cs_chunk_store_t *chunk_store, unsigned long *total_snapshots, unsigned long *total_files, unsigned long *total_chunks, unsigned long *corrupt_chunks, unsigned long *missing_chunks) {
+	char pattern[CS_PATH_CAP];
+	WIN32_FIND_DATAA find_data;
+
+	if (snprintf(pattern, sizeof(pattern), "%s\\*.manifest", snapshots_dir) < 0) return -1;
+	HANDLE handle = FindFirstFileA(pattern, &find_data);
+	if (handle == INVALID_HANDLE_VALUE) return 0;
+
+	do {
+		cs_manifest_t manifest;
+		char manifest_path[CS_PATH_CAP];
+		char snapshot_id[CS_PATH_CAP];
+
+		if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) continue;
+		cs_engine_join(manifest_path, sizeof(manifest_path), snapshots_dir, find_data.cFileName);
+
+		if (cs_manifest_init(&manifest) != 0) continue;
+		if (cs_manifest_load(manifest_path, &manifest) != 0) { cs_manifest_free(&manifest); continue; }
+
+		(*total_snapshots)++;
+
+		{
+			const char *dot = strstr(find_data.cFileName, ".manifest");
+			if (dot != NULL) {
+				size_t len = (size_t)(dot - find_data.cFileName);
+				if (len >= sizeof(snapshot_id)) len = sizeof(snapshot_id) - 1;
+				memcpy(snapshot_id, find_data.cFileName, len);
+				snapshot_id[len] = '\0';
+			} else {
+				strncpy(snapshot_id, find_data.cFileName, sizeof(snapshot_id) - 1);
+			}
+		}
+
+		cs_engine_verify_snapshot(&manifest, snapshot_id, chunk_store, total_files, total_chunks, corrupt_chunks, missing_chunks);
+		cs_manifest_free(&manifest);
+	} while (FindNextFileA(handle, &find_data) != 0);
+	FindClose(handle);
+	return 0;
+}
+#else
+static int cs_engine_do_verify_posix(const char *snapshots_dir, cs_chunk_store_t *chunk_store, unsigned long *total_snapshots, unsigned long *total_files, unsigned long *total_chunks, unsigned long *corrupt_chunks, unsigned long *missing_chunks) {
+	DIR *dir = opendir(snapshots_dir);
+	if (dir == NULL) return 0;
+
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		const char *dot = strstr(entry->d_name, ".manifest");
+		if (dot == NULL) continue;
+
+		cs_manifest_t manifest;
+		char manifest_path[CS_PATH_CAP];
+		char snapshot_id[CS_PATH_CAP];
+
+		cs_engine_join(manifest_path, sizeof(manifest_path), snapshots_dir, entry->d_name);
+		if (cs_manifest_init(&manifest) != 0) continue;
+		if (cs_manifest_load(manifest_path, &manifest) != 0) { cs_manifest_free(&manifest); continue; }
+
+		(*total_snapshots)++;
+		{
+			size_t len = (size_t)(dot - entry->d_name);
+			if (len >= sizeof(snapshot_id)) len = sizeof(snapshot_id) - 1;
+			memcpy(snapshot_id, entry->d_name, len);
+			snapshot_id[len] = '\0';
+		}
+
+		cs_engine_verify_snapshot(&manifest, snapshot_id, chunk_store, total_files, total_chunks, corrupt_chunks, missing_chunks);
+		cs_manifest_free(&manifest);
+	}
+	closedir(dir);
+	return 0;
+}
+#endif
+
+static void cs_engine_verify_snapshot(const cs_manifest_t *manifest, const char *snapshot_id, cs_chunk_store_t *chunk_store,
+									  unsigned long *total_files, unsigned long *total_chunks,
+									  unsigned long *corrupt_chunks, unsigned long *missing_chunks) {
+	printf("Verifying snapshot %s (%lu files, %llu bytes)...\n", snapshot_id, (unsigned long)manifest->file_count, manifest->total_bytes);
+
+	for (size_t fi = 0U; fi < manifest->file_count; ++fi) {
+		const cs_manifest_file_t *file = &manifest->files[fi];
+		(*total_files)++;
+
+		for (size_t ci = 0U; ci < file->chunk_count; ++ci) {
+			const cs_manifest_chunk_t *chunk = &file->chunks[ci];
+			unsigned char *chunk_data = NULL;
+			size_t chunk_size = 0U;
+			char hash_hex[CS_HASH_HEX_BUFSZ];
+
+			(*total_chunks)++;
+
+			if (!cs_chunk_store_exists(chunk_store, chunk->hash_hex)) {
+				printf("  MISSING chunk %s (file: %s)\n", chunk->hash_hex, file->path);
+				(*missing_chunks)++;
+				continue;
+			}
+
+			if (cs_chunk_store_get(chunk_store, chunk->hash_hex, &chunk_data, &chunk_size) != 0) {
+				printf("  ERROR reading chunk %s (file: %s)\n", chunk->hash_hex, file->path);
+				(*missing_chunks)++;
+				continue;
+			}
+
+			{
+				unsigned char *verify_data = chunk_data;
+				size_t verify_size = chunk_size;
+
+				{
+					unsigned char *decompressed = NULL;
+					size_t decompressed_size = 0U;
+					if (cs_codec_decompress_alloc(CS_CODEC_RLE, chunk_data, chunk_size, &decompressed, &decompressed_size) == 0) {
+						if (decompressed_size == chunk->size) {
+							free(verify_data);
+							verify_data = decompressed;
+							verify_size = decompressed_size;
+						} else {
+							free(decompressed);
+						}
+					}
+				}
+
+				if (cs_hash_sha256_hex(verify_data, verify_size, hash_hex) != 0) {
+					free(verify_data);
+					printf("  ERROR hashing chunk %s (file: %s)\n", chunk->hash_hex, file->path);
+					(*corrupt_chunks)++;
+					continue;
+				}
+
+				if (strcmp(hash_hex, chunk->hash_hex) != 0) {
+					printf("  CORRUPT chunk %s (file: %s) expected=%s actual=%s\n", chunk->hash_hex, file->path, chunk->hash_hex, hash_hex);
+					(*corrupt_chunks)++;
+				}
+
+				free(verify_data);
+			}
+		}
+	}
+}
+
+static int cs_engine_do_verify(const char *repo_path) {
+	char snapshots_dir[CS_PATH_CAP];
+	cs_chunk_store_t *chunk_store = NULL;
+	unsigned long total_snapshots = 0UL;
+	unsigned long total_files = 0UL;
+	unsigned long total_chunks = 0UL;
+	unsigned long corrupt_chunks = 0UL;
+	unsigned long missing_chunks = 0UL;
+
+	CS_LOG_INFO("engine: verify starting repo=%s", repo_path);
+
+	if (cs_engine_join(snapshots_dir, sizeof(snapshots_dir), repo_path, "snapshots") != 0) {
+		return -1;
+	}
+
+	chunk_store = cs_chunk_store_open(repo_path);
+	if (chunk_store == NULL) {
+		CS_LOG_ERROR("engine: verify failed to open chunk store");
+		return -1;
+	}
+
+#ifdef _WIN32
+	cs_engine_do_verify_win32(snapshots_dir, chunk_store, &total_snapshots, &total_files, &total_chunks, &corrupt_chunks, &missing_chunks);
+#else
+	cs_engine_do_verify_posix(snapshots_dir, chunk_store, &total_snapshots, &total_files, &total_chunks, &corrupt_chunks, &missing_chunks);
+#endif
+
+	cs_chunk_store_close(chunk_store);
+
+	printf("\nVerify summary:\n");
+	printf("  Snapshots checked: %lu\n", total_snapshots);
+	printf("  Files checked: %lu\n", total_files);
+	printf("  Chunks checked: %lu\n", total_chunks);
+	printf("  Missing chunks: %lu\n", missing_chunks);
+	printf("  Corrupt chunks: %lu\n", corrupt_chunks);
+
+	if (missing_chunks > 0UL || corrupt_chunks > 0UL) {
+		CS_LOG_ERROR("engine: verify found %lu missing, %lu corrupt chunks", missing_chunks, corrupt_chunks);
+		return -1;
+	}
+
+	CS_LOG_INFO("engine: verify complete - all chunks OK");
+	return 0;
+}
+
+static int cs_engine_do_prune(const char *repo_path, const char *keep_last_str, const char *older_than_str) {
+	cs_snapshot_store_t *store = NULL;
+	size_t keep_count = 0U;
+	time_t older_than_time = 0;
+	int status = 0;
+
+	CS_LOG_INFO("engine: prune starting repo=%s", repo_path);
+
+	store = cs_snapshot_store_open(repo_path);
+	if (store == NULL) {
+		CS_LOG_ERROR("engine: prune failed to open snapshot store");
+		return -1;
+	}
+
+	if (keep_last_str != NULL && keep_last_str[0] != '\0') {
+		keep_count = (size_t)atoi(keep_last_str);
+	}
+	if (older_than_str != NULL && older_than_str[0] != '\0') {
+		long days = atol(older_than_str);
+		if (days > 0L) {
+			older_than_time = cs_time_now_unix() - (time_t)(days * 86400L);
+		}
+	}
+
+	if (keep_count == 0U && older_than_time == 0) {
+		keep_count = 7U;
+	}
+
+	{
+		cs_snapshot_t *snapshots = NULL;
+		size_t snapshot_count = 0U;
+		size_t deleted_count = 0U;
+
+		if (cs_snapshot_store_list(store, &snapshots, &snapshot_count) != 0) {
+			cs_snapshot_store_close(store);
+			return -1;
+		}
+
+		if (snapshot_count > keep_count) {
+			size_t sort_i, sort_j;
+			for (sort_i = 0U; sort_i < snapshot_count; ++sort_i) {
+				for (sort_j = sort_i + 1U; sort_j < snapshot_count; ++sort_j) {
+					if (snapshots[sort_j].timestamp < snapshots[sort_i].timestamp) {
+						cs_snapshot_t tmp = snapshots[sort_i];
+						snapshots[sort_i] = snapshots[sort_j];
+						snapshots[sort_j] = tmp;
+					}
+				}
+			}
+
+			for (size_t i = 0U; i < snapshot_count - keep_count; ++i) {
+				int should_delete = 0;
+
+				if (older_than_time > 0 && snapshots[i].timestamp < older_than_time) {
+					should_delete = 1;
+				} else if (older_than_time == 0) {
+					should_delete = 1;
+				}
+
+				if (should_delete) {
+					char manifest_path[CS_PATH_CAP];
+					if (cs_snapshot_store_delete(store, snapshots[i].id) == 0) {
+						deleted_count++;
+						printf("Deleted snapshot: %s\n", snapshots[i].id);
+
+						if (cs_engine_snapshot_artifact_path(repo_path, snapshots[i].id, ".manifest", manifest_path, sizeof(manifest_path)) == 0) {
+							remove(manifest_path);
+						}
+					}
+				}
+			}
+		}
+
+		free(snapshots);
+		printf("Prune complete: %lu snapshot(s) deleted\n", (unsigned long)deleted_count);
+	}
+
+	cs_engine_orphan_gc(repo_path);
+
+	cs_snapshot_store_close(store);
+	return status;
+}
+
+static int cs_engine_do_sync(const char *repo_path, const char *remote) {
+	char host[256];
+	unsigned short port = 0;
+	const char *colon;
+	cs_net_client_t client;
+	cs_net_owned_frame_t reply;
+	int status = -1;
+
+	CS_LOG_INFO("engine: sync starting repo=%s remote=%s", repo_path, remote);
+
+	if (remote == NULL || remote[0] == '\0') {
+		CS_LOG_ERROR("engine: sync requires --remote HOST:PORT");
+		return -1;
+	}
+
+	colon = strchr(remote, ':');
+	if (colon == NULL) {
+		CS_LOG_ERROR("engine: sync remote must be HOST:PORT format");
+		return -1;
+	}
+
+	{
+		size_t host_len = (size_t)(colon - remote);
+		if (host_len >= sizeof(host)) host_len = sizeof(host) - 1;
+		memcpy(host, remote, host_len);
+		host[host_len] = '\0';
+	}
+
+	port = (unsigned short)atoi(colon + 1);
+	if (port == 0) {
+		CS_LOG_ERROR("engine: sync invalid port in %s", remote);
+		return -1;
+	}
+
+	cs_net_client_init(&client);
+	if (cs_net_client_connect(&client, host, port) != 0) {
+		CS_LOG_ERROR("engine: sync failed to connect to %s:%u", host, (unsigned)port);
+		return -1;
+	}
+
+	printf("Connected to remote %s:%u\n", host, (unsigned)port);
+
+	{
+		char manifest_text[4096];
+		cs_snapshot_store_t *store = cs_snapshot_store_open(repo_path);
+		if (store != NULL) {
+			cs_snapshot_t *snapshots = NULL;
+			size_t snapshot_count = 0U;
+			if (cs_snapshot_store_list(store, &snapshots, &snapshot_count) == 0) {
+				int offset = snprintf(manifest_text, sizeof(manifest_text), "SYNC repo=%s snapshots=%lu", repo_path, (unsigned long)snapshot_count);
+				if (offset > 0 && (size_t)offset < sizeof(manifest_text)) {
+					for (size_t i = 0U; i < snapshot_count && (size_t)offset < sizeof(manifest_text) - 100U; ++i) {
+						offset += snprintf(manifest_text + offset, sizeof(manifest_text) - (size_t)offset,
+										   "\n%s ts=%ld files=%lu", snapshots[i].id, (long)snapshots[i].timestamp,
+										   (unsigned long)snapshots[i].file_count);
+					}
+				}
+				free(snapshots);
+			}
+			cs_snapshot_store_close(store);
+
+			if (cs_net_client_exchange_text(&client, CS_NET_MESSAGE_MANIFEST, manifest_text, strlen(manifest_text), &reply) == 0) {
+				printf("Remote response: %.*s\n", (int)reply.frame.payload_size, (const char *)reply.frame.payload);
+				cs_net_owned_frame_reset(&reply);
+				status = 0;
+			}
+		}
+	}
+
+	{
+		cs_net_owned_frame_t bye_reply;
+		cs_net_client_exchange_text(&client, CS_NET_MESSAGE_BYE, "bye", 3, &bye_reply);
+		cs_net_owned_frame_reset(&bye_reply);
+	}
+
+	cs_net_client_close(&client);
+
+	if (status == 0) {
+		CS_LOG_INFO("engine: sync complete to %s:%u", host, (unsigned)port);
+	} else {
+		CS_LOG_ERROR("engine: sync failed to %s:%u", host, (unsigned)port);
+	}
+
+	return status;
+}
+
+static void cs_engine_print_snapshot_entry(const char *snapshot_path) {
+	char line[512];
+	FILE *fp = fopen(snapshot_path, "rb");
+	if (fp == NULL) return;
+
+	char sid[64] = "";
+	char stime[64] = "";
+	char slabel[256] = "";
+	char sfiles[16] = "";
+	char ssize[32] = "";
+
+	while (fgets(line, sizeof(line), fp) != NULL) {
+		char *nl = strchr(line, '\n');
+		if (nl) *nl = '\0';
+
+		if (strncmp(line, "id=", 3) == 0) strncpy(sid, line + 3, sizeof(sid) - 1);
+		else if (strncmp(line, "timestamp=", 10) == 0) {
+			time_t ts = (time_t)atol(line + 10);
+			struct tm *tm_info = localtime(&ts);
+			if (tm_info) strftime(stime, sizeof(stime), "%Y-%m-%d %H:%M:%S", tm_info);
+		}
+		else if (strncmp(line, "label=", 6) == 0) strncpy(slabel, line + 6, sizeof(slabel) - 1);
+		else if (strncmp(line, "file_count=", 11) == 0) strncpy(sfiles, line + 11, sizeof(sfiles) - 1);
+		else if (strncmp(line, "size_bytes=", 11) == 0) {
+			unsigned long long bytes = strtoull(line + 11, NULL, 10);
+			if (bytes > 1073741824ULL)
+				snprintf(ssize, sizeof(ssize), "%.1f GB", (double)bytes / 1073741824.0);
+			else if (bytes > 1048576ULL)
+				snprintf(ssize, sizeof(ssize), "%.1f MB", (double)bytes / 1048576.0);
+			else if (bytes > 1024ULL)
+				snprintf(ssize, sizeof(ssize), "%.1f KB", (double)bytes / 1024.0);
+			else {
+				unsigned long bytes_ul = (unsigned long)bytes;
+				snprintf(ssize, sizeof(ssize), "%lu B", bytes_ul);
+			}
+		}
+	}
+	fclose(fp);
+	printf("%-30s %-20s %-10s %-12s %s\n", sid, stime, sfiles, ssize, slabel);
+}
+
+#ifdef _WIN32
+static int cs_engine_do_list_win32(const char *snapshots_dir, int *found_any) {
+	char pattern[CS_PATH_CAP];
+	WIN32_FIND_DATAA find_data;
+
+	if (snprintf(pattern, sizeof(pattern), "%s\\*.snapshot", snapshots_dir) < 0) return -1;
+	HANDLE handle = FindFirstFileA(pattern, &find_data);
+	if (handle == INVALID_HANDLE_VALUE) return 0;
+
+	do {
+		if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) continue;
+		if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0) continue;
+		*found_any = 1;
+		char snapshot_path[CS_PATH_CAP];
+		cs_engine_join(snapshot_path, sizeof(snapshot_path), snapshots_dir, find_data.cFileName);
+		cs_engine_print_snapshot_entry(snapshot_path);
+	} while (FindNextFileA(handle, &find_data) != 0);
+	FindClose(handle);
+	return 0;
+}
+#else
+static int cs_engine_do_list_posix(const char *snapshots_dir, int *found_any) {
+	DIR *dir = opendir(snapshots_dir);
+	if (dir == NULL) return 0;
+
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		if (strstr(entry->d_name, ".snapshot") == NULL) continue;
+		*found_any = 1;
+		char snapshot_path[CS_PATH_CAP];
+		cs_engine_join(snapshot_path, sizeof(snapshot_path), snapshots_dir, entry->d_name);
+		cs_engine_print_snapshot_entry(snapshot_path);
+	}
+	closedir(dir);
+	return 0;
+}
+#endif
+
+static int cs_engine_do_list(const char *repo_path) {
+	char snapshots_dir[CS_PATH_CAP];
+	int found_any = 0;
+
+	if (cs_engine_join(snapshots_dir, sizeof(snapshots_dir), repo_path, "snapshots") != 0) {
+		fprintf(stderr, "list: failed to build snapshots directory path\n");
+		return -1;
+	}
+
+	printf("Snapshots:\n");
+	printf("%-30s %-20s %-10s %-12s %s\n", "ID", "Timestamp", "Files", "Size", "Label");
+	printf("%-30s %-20s %-10s %-12s %s\n", "---", "---------", "-----", "----", "-----");
+
+#ifdef _WIN32
+	cs_engine_do_list_win32(snapshots_dir, &found_any);
+#else
+	cs_engine_do_list_posix(snapshots_dir, &found_any);
+#endif
+
+	if (!found_any) {
+		printf("  (none)\n");
+	}
+
+	return 0;
+}
+
 int cs_engine_init(void) {
 	CS_LOG_INFO("engine: init called");
 	return 0;
@@ -397,6 +1073,7 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 	cs_fs_scan_options_t scan_opts;
 	char manifest_path[CS_PATH_CAP];
 	char journal_record[CS_PATH_CAP * 2U];
+	char passphrase[256] = "";
 	int status;
 
 	if (source_path == NULL || repo_path == NULL) {
@@ -409,12 +1086,18 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 				 source_path, repo_path, dry_run, compress, encrypt, label ? label : "",
 				 (unsigned long)include_count, (unsigned long)exclude_count);
 
-	if (compress != 0) {
-		CS_LOG_WARN("engine: compression flag is recorded but not applied by this engine build");
-	}
 	if (encrypt != 0) {
-		CS_LOG_WARN("engine: encryption flag is recorded but no passphrase is available at this boundary");
+		CS_LOG_INFO("engine: encryption enabled, requesting passphrase");
+		printf("Enter encryption passphrase: ");
+		if (fgets(passphrase, sizeof(passphrase), stdin) != NULL) {
+			size_t plen = strlen(passphrase);
+			while (plen > 0U && (passphrase[plen - 1U] == '\n' || passphrase[plen - 1U] == '\r')) {
+				passphrase[--plen] = '\0';
+			}
+		}
 	}
+
+	cs_journal_replay(repo_path, NULL, NULL);
 
 	if (cs_manifest_init(&manifest) != 0) {
 		return -1;
@@ -425,9 +1108,13 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 	backup_ctx.chunk_store = NULL;
 	backup_ctx.index_store = NULL;
 	backup_ctx.dry_run = dry_run != 0;
+	backup_ctx.compress = compress != 0;
+	backup_ctx.encrypt = encrypt != 0;
+	backup_ctx.passphrase = passphrase[0] != '\0' ? passphrase : NULL;
 	backup_ctx.file_count = 0U;
 	backup_ctx.total_bytes = 0ULL;
 	backup_ctx.total_chunks = 0ULL;
+
 	if (cs_chunker_init(&backup_ctx.chunker, CS_DELTA_DEFAULT_CHUNK_SIZE) != 0) {
 		cs_manifest_free(&manifest);
 		return -1;
@@ -502,12 +1189,32 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 		return -1;
 	}
 
-	if (cs_manifest_write(&manifest, manifest_path) != 0) {
-		cs_chunk_store_close(chunk_store);
-		cs_index_store_close(index_store);
-		cs_snapshot_store_close(snapshot_store);
-		cs_manifest_free(&manifest);
-		return -1;
+	{
+		char tmp_manifest_path[CS_PATH_CAP];
+		int written = snprintf(tmp_manifest_path, sizeof(tmp_manifest_path), "%s.tmp", manifest_path);
+		if (written < 0 || (size_t)written >= sizeof(tmp_manifest_path)) {
+			cs_chunk_store_close(chunk_store);
+			cs_index_store_close(index_store);
+			cs_snapshot_store_close(snapshot_store);
+			cs_manifest_free(&manifest);
+			return -1;
+		}
+		if (cs_manifest_write(&manifest, tmp_manifest_path) != 0) {
+			cs_chunk_store_close(chunk_store);
+			cs_index_store_close(index_store);
+			cs_snapshot_store_close(snapshot_store);
+			cs_manifest_free(&manifest);
+			remove(tmp_manifest_path);
+			return -1;
+		}
+		if (rename(tmp_manifest_path, manifest_path) != 0) {
+			cs_chunk_store_close(chunk_store);
+			cs_index_store_close(index_store);
+			cs_snapshot_store_close(snapshot_store);
+			cs_manifest_free(&manifest);
+			remove(tmp_manifest_path);
+			return -1;
+		}
 	}
 
 	if (snprintf(journal_record, sizeof(journal_record), "BACKUP\tsnapshot=%s\tsource=%s\tfiles=%lu\tbytes=%lu", snapshot.id, source_path, (unsigned long)manifest.file_count, (unsigned long)manifest.total_bytes) > 0) {
@@ -565,7 +1272,7 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 	}
 
 	for (file_index = 0U; file_index < manifest.file_count; ++file_index) {
-		if (cs_engine_restore_file(chunk_store, &manifest.files[file_index], out_path) != 0) {
+		if (cs_engine_restore_file_internal(chunk_store, &manifest.files[file_index], out_path) != 0) {
 			cs_chunk_store_close(chunk_store);
 			cs_manifest_free(&manifest);
 			return -1;
@@ -583,4 +1290,118 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 	cs_chunk_store_close(chunk_store);
 	cs_manifest_free(&manifest);
 	return status;
+}
+
+int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const char *source_file, const char *out_path) {
+	cs_manifest_t manifest;
+	cs_chunk_store_t *chunk_store = NULL;
+
+	if (repo_path == NULL || snapshot_id == NULL || source_file == NULL || out_path == NULL) {
+		CS_LOG_ERROR("engine: restore_file requires repo, snapshot, source, out");
+		return -1;
+	}
+
+	CS_LOG_INFO("engine: restoring file=%s from snapshot=%s to %s", source_file, snapshot_id, out_path);
+
+	if (cs_repo_validate(repo_path) != 0) {
+		CS_LOG_ERROR("engine: invalid repository %s", repo_path);
+		return -1;
+	}
+
+	if (cs_manifest_init(&manifest) != 0) {
+		return -1;
+	}
+
+	if (cs_engine_restore_manifest(repo_path, snapshot_id, &manifest) != 0) {
+		cs_manifest_free(&manifest);
+		return -1;
+	}
+
+	chunk_store = cs_chunk_store_open(repo_path);
+	if (chunk_store == NULL) {
+		cs_manifest_free(&manifest);
+		return -1;
+	}
+
+	for (size_t fi = 0U; fi < manifest.file_count; ++fi) {
+		const cs_manifest_file_t *file = &manifest.files[fi];
+		if (strcmp(file->path, source_file) == 0) {
+			char full_out_path[CS_PATH_CAP];
+			char parent[CS_PATH_CAP];
+			char *slash;
+
+			if (cs_engine_join(full_out_path, sizeof(full_out_path), out_path, file->path) != 0) {
+				cs_chunk_store_close(chunk_store);
+				cs_manifest_free(&manifest);
+				return -1;
+			}
+
+			slash = strrchr(full_out_path, cs_path_separator());
+			if (slash != NULL) {
+				*slash = '\0';
+				if (cs_engine_mkdir_p(full_out_path) != 0) {
+					*slash = cs_path_separator();
+					cs_chunk_store_close(chunk_store);
+					cs_manifest_free(&manifest);
+					return -1;
+				}
+				*slash = cs_path_separator();
+			}
+
+			cs_engine_join(parent, sizeof(parent), out_path, ".");
+			if (cs_engine_mkdir_p(parent) != 0) {
+				cs_chunk_store_close(chunk_store);
+				cs_manifest_free(&manifest);
+				return -1;
+			}
+
+			if (cs_engine_restore_file_internal(chunk_store, file, out_path) != 0) {
+				cs_chunk_store_close(chunk_store);
+				cs_manifest_free(&manifest);
+				return -1;
+			}
+
+			printf("Restored single file: %s -> %s\n", source_file, full_out_path);
+			cs_chunk_store_close(chunk_store);
+			cs_manifest_free(&manifest);
+			return 0;
+		}
+	}
+
+	cs_chunk_store_close(chunk_store);
+	cs_manifest_free(&manifest);
+	CS_LOG_ERROR("engine: restore_file: '%s' not found in snapshot", source_file);
+	return -1;
+}
+
+int cs_engine_verify(const char *repo_path) {
+	if (repo_path == NULL) {
+		CS_LOG_ERROR("engine: verify requires repo path");
+		return -1;
+	}
+	return cs_engine_do_verify(repo_path);
+}
+
+int cs_engine_prune(const char *repo_path, const char *keep_last, const char *older_than) {
+	if (repo_path == NULL) {
+		CS_LOG_ERROR("engine: prune requires repo path");
+		return -1;
+	}
+	return cs_engine_do_prune(repo_path, keep_last, older_than);
+}
+
+int cs_engine_sync(const char *repo_path, const char *remote) {
+	if (repo_path == NULL || remote == NULL) {
+		CS_LOG_ERROR("engine: sync requires repo path and remote");
+		return -1;
+	}
+	return cs_engine_do_sync(repo_path, remote);
+}
+
+int cs_engine_list(const char *repo_path) {
+	if (repo_path == NULL) {
+		fprintf(stderr, "list requires --repo PATH\n");
+		return -1;
+	}
+	return cs_engine_do_list(repo_path);
 }

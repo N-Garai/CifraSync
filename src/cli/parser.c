@@ -177,6 +177,14 @@ int cs_parse_cli(int argc, char **argv, cs_cli_options_t *options, char *error_b
 			++i;
 			continue;
 		}
+		if (strcmp(arg, "--source-file") == 0) {
+			if (require_value(arg, value, error_buffer, error_buffer_size) != 0) {
+				return -1;
+			}
+			options->source_file = value;
+			++i;
+			continue;
+		}
 		if (strcmp(arg, "--include-file") == 0) {
 			if (require_value(arg, value, error_buffer, error_buffer_size) != 0) {
 				return -1;

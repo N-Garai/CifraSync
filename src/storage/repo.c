@@ -87,13 +87,21 @@ int cs_repo_init(const char *repo_path, cs_repo_t *repo) {
 	time_t now = time(NULL);
 	fprintf(fp, "version=%s\n", CS_REPO_VERSION);
 	fprintf(fp, "created_at=%ld\n", (long)now);
+#ifdef _WIN32
 	fprintf(fp, "platform=windows\n");
+#else
+	fprintf(fp, "platform=linux\n");
+#endif
 	fclose(fp);
 
 	strncpy(repo->path, repo_path, sizeof(repo->path) - 1);
 	strncpy(repo->version, CS_REPO_VERSION, sizeof(repo->version) - 1);
 	repo->created_at = now;
+#ifdef _WIN32
 	strncpy(repo->platform, "windows", sizeof(repo->platform) - 1);
+#else
+	strncpy(repo->platform, "linux", sizeof(repo->platform) - 1);
+#endif
 
 	return 0;
 }

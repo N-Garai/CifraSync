@@ -3,6 +3,7 @@
 
 #include "core/engine.h"
 #include "common/path.h"
+#include "util/config.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -87,7 +88,11 @@ static int ensure_repo_layout(const char *repo_path) {
 	}
 	fprintf(meta, "name=CifraSync\n");
 	fprintf(meta, "version=1\n");
+#ifdef _WIN32
 	fprintf(meta, "platform=windows\n");
+#else
+	fprintf(meta, "platform=linux\n");
+#endif
 	fclose(meta);
 	return 0;
 }
@@ -124,7 +129,7 @@ void cs_print_help(void) {
 	puts("  backup   --source PATH --repo PATH [--dry-run] [--compress] [--encrypt] [--label TEXT]");
 	puts("           [--include-file FILE] [--exclude-file FILE]");
 	puts("  list     --repo PATH");
-	puts("  restore  --repo PATH --snapshot ID --out PATH");
+	puts("  restore  --repo PATH --snapshot ID --out PATH [--source-file PATH]");
 	puts("  verify   --repo PATH");
 	puts("  prune    --repo PATH [--keep-last N] [--older-than DAYS]");
 	puts("  sync     --repo PATH --remote HOST:PORT");
@@ -156,48 +161,11 @@ static int handle_init(const cs_cli_options_t *options) {
 }
 
 static int handle_list(const cs_cli_options_t *options) {
-	char pattern[CS_PATH_CAP];
-	char snapshots_dir[CS_PATH_CAP];
-	WIN32_FIND_DATAA find_data;
-	HANDLE handle;
-	int found_any = 0;
-
 	if (is_required_missing(options->repo)) {
 		fprintf(stderr, "list requires --repo PATH\n");
 		return CS_ERR_USAGE;
 	}
-	if (path_join(snapshots_dir, sizeof(snapshots_dir), options->repo, "snapshots") != 0) {
-		fprintf(stderr, "list: failed to build snapshots directory path\n");
-		return CS_ERR_INVALID;
-	}
-	if (snprintf(pattern, sizeof(pattern), "%s\\*", snapshots_dir) < 0) {
-		fprintf(stderr, "list: failed to build search pattern\n");
-		return CS_ERR_INVALID;
-	}
-
-	handle = FindFirstFileA(pattern, &find_data);
-	if (handle == INVALID_HANDLE_VALUE) {
-		printf("No snapshots found in %s\n", snapshots_dir);
-		return CS_OK;
-	}
-
-	puts("Snapshots:");
-	do {
-		if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-			continue;
-		}
-		if (strcmp(find_data.cFileName, ".") == 0 || strcmp(find_data.cFileName, "..") == 0) {
-			continue;
-		}
-		found_any = 1;
-		printf("  %s\n", find_data.cFileName);
-	} while (FindNextFileA(handle, &find_data) != 0);
-	FindClose(handle);
-
-	if (!found_any) {
-		puts("  (none)");
-	}
-	return CS_OK;
+	return cs_engine_list(options->repo);
 }
 
 static int handle_backup(const cs_cli_options_t *options) {
@@ -249,11 +217,19 @@ static int handle_restore(const cs_cli_options_t *options) {
 		fprintf(stderr, "restore requires --repo PATH --snapshot ID --out PATH\n");
 		return CS_ERR_USAGE;
 	}
-	if (cs_engine_restore(options->repo, options->snapshot, options->output) != 0) {
-		fprintf(stderr, "restore failed\n");
-		return CS_ERR_INVALID;
+	if (options->source_file != NULL && options->source_file[0] != '\0') {
+		if (cs_engine_restore_file(options->repo, options->snapshot, options->source_file, options->output) != 0) {
+			fprintf(stderr, "restore single file failed\n");
+			return CS_ERR_INVALID;
+		}
+		printf("Single file restore complete.\n");
+	} else {
+		if (cs_engine_restore(options->repo, options->snapshot, options->output) != 0) {
+			fprintf(stderr, "restore failed\n");
+			return CS_ERR_INVALID;
+		}
+		printf("Restore complete.\n");
 	}
-	printf("Restore complete.\n");
 	return CS_OK;
 }
 
@@ -262,8 +238,12 @@ static int handle_verify(const cs_cli_options_t *options) {
 		fprintf(stderr, "verify requires --repo PATH\n");
 		return CS_ERR_USAGE;
 	}
-	fprintf(stderr, "verify is parsed correctly but not yet wired to the storage engine.\n");
-	return CS_ERR_UNSUPPORTED;
+	if (cs_engine_verify(options->repo) != 0) {
+		fprintf(stderr, "verify: data integrity check failed\n");
+		return CS_ERR_INVALID;
+	}
+	printf("Verify complete: all chunks pass integrity check.\n");
+	return CS_OK;
 }
 
 static int handle_prune(const cs_cli_options_t *options) {
@@ -271,8 +251,11 @@ static int handle_prune(const cs_cli_options_t *options) {
 		fprintf(stderr, "prune requires --repo PATH\n");
 		return CS_ERR_USAGE;
 	}
-	fprintf(stderr, "prune is parsed correctly but not yet wired to the storage engine.\n");
-	return CS_ERR_UNSUPPORTED;
+	if (cs_engine_prune(options->repo, options->keep_last, options->older_than) != 0) {
+		fprintf(stderr, "prune failed\n");
+		return CS_ERR_INVALID;
+	}
+	return CS_OK;
 }
 
 static int handle_sync(const cs_cli_options_t *options) {
@@ -280,16 +263,32 @@ static int handle_sync(const cs_cli_options_t *options) {
 		fprintf(stderr, "sync requires --repo PATH --remote HOST:PORT\n");
 		return CS_ERR_USAGE;
 	}
-	fprintf(stderr, "sync is parsed correctly but not yet wired to the storage engine.\n");
-	return CS_ERR_UNSUPPORTED;
+	if (cs_engine_sync(options->repo, options->remote) != 0) {
+		fprintf(stderr, "sync failed\n");
+		return CS_ERR_INVALID;
+	}
+	printf("Sync complete.\n");
+	return CS_OK;
 }
 
 int cs_run(int argc, char **argv) {
 	cs_cli_options_t options;
 	char error_buffer[128];
+	cs_config_t config;
+	int result;
+
+	cs_config_init(&config);
+	{
+		FILE *cfg_fp = fopen("cifrasync.conf", "r");
+		if (cfg_fp != NULL) {
+			fclose(cfg_fp);
+			cs_config_load(&config, "cifrasync.conf");
+		}
+	}
 
 	if (argc < 2 || argv == NULL || argv[1] == NULL) {
 		cs_print_help();
+		cs_config_free(&config);
 		return CS_ERR_USAGE;
 	}
 
@@ -298,32 +297,46 @@ int cs_run(int argc, char **argv) {
 	if (cs_parse_cli(argc, argv, &options, error_buffer, sizeof(error_buffer)) != 0) {
 		fprintf(stderr, "Error: %s\n", error_buffer[0] ? error_buffer : "invalid arguments");
 		fprintf(stderr, "Run 'cifrasync --help' for usage.\n");
+		cs_config_free(&config);
 		return CS_ERR_USAGE;
 	}
 
 	switch (options.command) {
 		case CS_CMD_HELP:
 			cs_print_help();
-			return CS_OK;
+			result = CS_OK;
+			break;
 		case CS_CMD_VERSION:
 			printf("cifrasync %s\n", cs_version());
-			return CS_OK;
+			result = CS_OK;
+			break;
 		case CS_CMD_INIT:
-			return handle_init(&options);
+			result = handle_init(&options);
+			break;
 		case CS_CMD_LIST:
-			return handle_list(&options);
+			result = handle_list(&options);
+			break;
 		case CS_CMD_BACKUP:
-			return handle_backup(&options);
+			result = handle_backup(&options);
+			break;
 		case CS_CMD_RESTORE:
-			return handle_restore(&options);
+			result = handle_restore(&options);
+			break;
 		case CS_CMD_VERIFY:
-			return handle_verify(&options);
+			result = handle_verify(&options);
+			break;
 		case CS_CMD_PRUNE:
-			return handle_prune(&options);
+			result = handle_prune(&options);
+			break;
 		case CS_CMD_SYNC:
-			return handle_sync(&options);
+			result = handle_sync(&options);
+			break;
 		default:
 			fprintf(stderr, "Unknown command.\n");
-			return CS_ERR_USAGE;
+			result = CS_ERR_USAGE;
+			break;
 	}
+
+	cs_config_free(&config);
+	return result;
 }

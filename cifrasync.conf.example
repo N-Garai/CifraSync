@@ -1,0 +1,9 @@
+# CifraSync Configuration File
+# Place this file as cifrasync.conf in the working directory
+
+default_repo=test_repo
+default_compress=yes
+default_encrypt=no
+log_file=cifrasync.log
+keep_snapshots=7
+prune_days=30

@@ -28,6 +28,7 @@ typedef struct {
 	const char *older_than;
 	const char *include_file;
 	const char *exclude_file;
+	const char *source_file;
 	int dry_run;
 	int compress;
 	int encrypt;
