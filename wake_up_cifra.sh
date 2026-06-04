@@ -12,10 +12,10 @@ if [ ! -f "bin/cifrasync" ]; then
 fi
 
 echo ""
-echo "  ╔══════════════════════════════════════════╗"
-echo "  ║        C I F R A S Y N C                ║"
-echo "  ║    Encrypted Incremental Backup & Sync  ║"
-echo "  ╚══════════════════════════════════════════╝"
+echo "  +-----------------------------------------+"
+echo "  |        C I F R A S Y N C                |"
+echo "  |    Encrypted Incremental Backup & Sync  |"
+echo "  +-----------------------------------------+"
 echo ""
 echo "  Waking up CifraSync..."
 echo ""

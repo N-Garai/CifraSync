@@ -1,7 +1,7 @@
 # CifraSync Setup — run this ONCE to enable "wake up cifra"
 # Run: powershell -ExecutionPolicy Bypass -File setup.ps1
 
-$projectRoot = "C:\Users\NAYANANSHU GARAI\CifraSync"
+$projectRoot = $PSScriptRoot
 $binDir = Join-Path $projectRoot "bin"
 
 # 1. Add bin\ to PATH
