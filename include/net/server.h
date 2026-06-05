@@ -17,6 +17,8 @@ int cs_net_server_run(const char *bind_host,
 
 int cs_net_server_default_handler(const cs_net_frame_t *request, cs_net_owned_frame_t *response, void *ctx);
 
+int cs_net_server_sync_handler(const cs_net_frame_t *request, cs_net_owned_frame_t *response, void *ctx);
+
 const char *cs_net_server_last_error(void);
 
 #endif

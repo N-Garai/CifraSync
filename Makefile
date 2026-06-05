@@ -209,7 +209,7 @@ $(BUILD_DIR)/net_client.o: src/net/client.c include/net/client.h include/net/pro
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/net_server.o: src/net/server.c include/net/server.h include/net/protocol.h include/common/memory.h
+$(BUILD_DIR)/net_server.o: src/net/server.c include/net/server.h include/net/protocol.h include/common/memory.h include/common/constants.h include/common/path.h include/storage/chunk_store.h include/storage/snapshot_store.h
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 

@@ -58,7 +58,7 @@ void cs_print_help(void) {
 	puts("  verify   --repo PATH");
 	puts("  prune    --repo PATH [--keep-last N] [--older-than DAYS]");
 	puts("  sync     --repo PATH --remote HOST:PORT");
-	puts("  serve    --bind HOST:PORT");
+	puts("  serve    --bind HOST:PORT [--repo PATH]");
 }
 
 const char *cs_version(void) {
@@ -196,6 +196,7 @@ static int handle_serve(const cs_cli_options_t *options) {
 	char host[256];
 	unsigned short port = 0;
 	const char *colon;
+	void *ctx = NULL;
 
 	if (is_required_missing(options->bind)) {
 		fprintf(stderr, "serve requires --bind HOST:PORT\n");
@@ -221,10 +222,17 @@ static int handle_serve(const cs_cli_options_t *options) {
 		return CS_ERR_INVALID;
 	}
 
+	if (options->repo != NULL && options->repo[0] != '\0') {
+		ctx = (void *)options->repo;
+	}
+
 	printf("Starting CifraSync server on %s:%u (Ctrl+C to stop)\n", host, (unsigned)port);
+	if (ctx != NULL) {
+		printf("Repository: %s\n", (const char *)ctx);
+	}
 	fflush(stdout);
 
-	if (cs_net_server_run(host, port, NULL, NULL, 0) != 0) {
+	if (cs_net_server_run(host, port, cs_net_server_sync_handler, ctx, 0) != 0) {
 		fprintf(stderr, "serve: server failed: %s\n", cs_net_server_last_error());
 		return CS_ERR_INVALID;
 	}

@@ -864,13 +864,52 @@ static int cs_engine_do_prune(const char *repo_path, const char *keep_last_str, 
 	return status;
 }
 
+static int cs_engine_sync_send_chunk(cs_net_client_t *client, const char *hash_hex, const unsigned char *data, size_t size) {
+	cs_net_frame_t chunk_frame;
+	cs_net_owned_frame_t reply;
+	unsigned char *payload;
+	int status;
+
+	payload = (unsigned char *)malloc(CS_HASH_HEX_LEN + size);
+	if (payload == NULL) {
+		return -1;
+	}
+
+	memcpy(payload, hash_hex, CS_HASH_HEX_LEN);
+	memcpy(payload + CS_HASH_HEX_LEN, data, size);
+
+	chunk_frame.type = CS_NET_MESSAGE_CHUNK;
+	chunk_frame.payload = payload;
+	chunk_frame.payload_size = CS_HASH_HEX_LEN + size;
+
+	status = cs_net_client_send_frame(client, &chunk_frame);
+	free(payload);
+	if (status != 0) {
+		return status;
+	}
+
+	status = cs_net_client_receive_frame(client, &reply);
+	if (status != 0) {
+		return status;
+	}
+
+	status = 0;
+	cs_net_owned_frame_reset(&reply);
+	return status;
+}
+
 static int cs_engine_do_sync(const char *repo_path, const char *remote) {
 	char host[256];
 	unsigned short port = 0;
 	const char *colon;
 	cs_net_client_t client;
 	cs_net_owned_frame_t reply;
+	cs_snapshot_store_t *store = NULL;
+	cs_chunk_store_t *chunk_store = NULL;
+	cs_snapshot_t *snapshots = NULL;
+	size_t snapshot_count = 0U;
 	int status = -1;
+	int sync_ok = 0;
 
 	CS_LOG_INFO("engine: sync starting repo=%s remote=%s", repo_path, remote);
 
@@ -906,32 +945,207 @@ static int cs_engine_do_sync(const char *repo_path, const char *remote) {
 
 	printf("Connected to remote %s:%u\n", host, (unsigned)port);
 
-	{
-		char manifest_text[4096];
-		cs_snapshot_store_t *store = cs_snapshot_store_open(repo_path);
-		if (store != NULL) {
-			cs_snapshot_t *snapshots = NULL;
-			size_t snapshot_count = 0U;
-			if (cs_snapshot_store_list(store, &snapshots, &snapshot_count) == 0) {
-				int offset = snprintf(manifest_text, sizeof(manifest_text), "SYNC repo=%s snapshots=%lu", repo_path, (unsigned long)snapshot_count);
-				if (offset > 0 && (size_t)offset < sizeof(manifest_text)) {
-					for (size_t i = 0U; i < snapshot_count && (size_t)offset < sizeof(manifest_text) - 100U; ++i) {
-						offset += snprintf(manifest_text + offset, sizeof(manifest_text) - (size_t)offset,
-										   "\n%s ts=%ld files=%lu", snapshots[i].id, (long)snapshots[i].timestamp,
-										   (unsigned long)snapshots[i].file_count);
+	/* Send HELLO */
+	if (cs_net_client_exchange_text(&client, CS_NET_MESSAGE_HELLO, repo_path, strlen(repo_path), &reply) != 0) {
+		CS_LOG_ERROR("engine: sync HELLO failed");
+		goto cleanup;
+	}
+	printf("HELLO response: %.*s\n", (int)reply.frame.payload_size, (const char *)reply.frame.payload);
+	cs_net_owned_frame_reset(&reply);
+
+	/* Open local repo */
+	store = cs_snapshot_store_open(repo_path);
+	if (store == NULL) {
+		CS_LOG_ERROR("engine: sync failed to open snapshot store");
+		goto cleanup;
+	}
+
+	chunk_store = cs_chunk_store_open(repo_path);
+	if (chunk_store == NULL) {
+		CS_LOG_ERROR("engine: sync failed to open chunk store");
+		goto cleanup;
+	}
+
+	if (cs_snapshot_store_list(store, &snapshots, &snapshot_count) != 0) {
+		CS_LOG_ERROR("engine: sync failed to list snapshots");
+		goto cleanup;
+	}
+
+	printf("Syncing %lu snapshot(s)...\n", (unsigned long)snapshot_count);
+
+	for (size_t si = 0U; si < snapshot_count; ++si) {
+		char manifest_path[CS_PATH_CAP];
+		char *manifest_content = NULL;
+		long manifest_size;
+		char *manifest_payload;
+		size_t payload_size;
+		FILE *fp;
+
+		printf("  Snapshot %s...\n", snapshots[si].id);
+
+		if (cs_engine_snapshot_artifact_path(repo_path, snapshots[si].id, ".manifest", manifest_path, sizeof(manifest_path)) != 0) {
+			CS_LOG_ERROR("engine: sync failed to build manifest path for %s", snapshots[si].id);
+			goto cleanup;
+		}
+
+		fp = fopen(manifest_path, "rb");
+		if (fp == NULL) {
+			CS_LOG_WARN("engine: sync manifest not found for %s, skipping", snapshots[si].id);
+			continue;
+		}
+
+		{
+			fseek(fp, 0, SEEK_END);
+			manifest_size = ftell(fp);
+			fseek(fp, 0, SEEK_SET);
+
+			if (manifest_size <= 0) {
+				fclose(fp);
+				continue;
+			}
+
+			manifest_content = (char *)malloc((size_t)manifest_size + 1U);
+			if (manifest_content == NULL) {
+				fclose(fp);
+				goto cleanup;
+			}
+
+			if (fread(manifest_content, 1, (size_t)manifest_size, fp) != (size_t)manifest_size) {
+				fclose(fp);
+				free(manifest_content);
+				goto cleanup;
+			}
+			manifest_content[manifest_size] = '\0';
+			fclose(fp);
+		}
+
+		/* Build manifest payload: header line + full manifest content */
+		{
+			char header_buf[512];
+			int header_len = snprintf(header_buf, sizeof(header_buf),
+				"SNAPSHOT\tid=%s\tsource=%s\tts=%ld\tfiles=%lu\tsize=%lu",
+				snapshots[si].id, snapshots[si].source_path,
+				(long)snapshots[si].timestamp,
+				(unsigned long)snapshots[si].file_count,
+				(unsigned long)snapshots[si].size_bytes);
+			if (header_len < 0 || (size_t)header_len >= sizeof(header_buf)) {
+				free(manifest_content);
+				goto cleanup;
+			}
+
+			payload_size = (size_t)header_len + 1U + (size_t)manifest_size;
+			manifest_payload = (char *)malloc(payload_size + 1U);
+			if (manifest_payload == NULL) {
+				free(manifest_content);
+				goto cleanup;
+			}
+
+			memcpy(manifest_payload, header_buf, (size_t)header_len);
+			manifest_payload[header_len] = '\n';
+			memcpy(manifest_payload + header_len + 1U, manifest_content, (size_t)manifest_size);
+			manifest_payload[payload_size] = '\0';
+
+			free(manifest_content);
+		}
+
+		/* Send MANIFEST */
+		{
+			cs_net_frame_t manifest_frame;
+			cs_net_owned_frame_t manifest_reply;
+
+			manifest_frame.type = CS_NET_MESSAGE_MANIFEST;
+			manifest_frame.payload = (unsigned char *)manifest_payload;
+			manifest_frame.payload_size = payload_size;
+
+			if (cs_net_client_send_frame(&client, &manifest_frame) != 0) {
+				free(manifest_payload);
+				CS_LOG_ERROR("engine: sync failed to send manifest for %s", snapshots[si].id);
+				goto cleanup;
+			}
+			free(manifest_payload);
+
+			if (cs_net_client_receive_frame(&client, &manifest_reply) != 0) {
+				CS_LOG_ERROR("engine: sync failed to receive manifest ack for %s", snapshots[si].id);
+				goto cleanup;
+			}
+
+			printf("    Manifest response: %.*s\n", (int)manifest_reply.frame.payload_size, (const char *)manifest_reply.frame.payload);
+
+			/* Parse missing hashes from response */
+			{
+				const char *resp = (const char *)manifest_reply.frame.payload;
+				size_t resp_len = manifest_reply.frame.payload_size;
+				const char *missing_prefix = "missing=";
+				const char *missing_pos;
+				const char *hash_start;
+				size_t missing_count = 0U;
+				size_t sent_count = 0U;
+
+				missing_pos = strstr(resp, missing_prefix);
+				if (missing_pos != NULL) {
+					missing_pos += strlen(missing_prefix);
+					missing_count = (size_t)atol(missing_pos);
+				}
+
+				if (missing_count > 0) {
+					hash_start = (const char *)memchr(resp, '\n', resp_len);
+					if (hash_start != NULL) {
+						hash_start++;
+					} else {
+						hash_start = resp + resp_len;
+					}
+
+					while (hash_start < resp + resp_len && sent_count < missing_count) {
+						const char *nl = (const char *)memchr(hash_start, '\n', (size_t)(resp + resp_len - hash_start));
+						size_t hash_len;
+
+						if (nl != NULL) {
+							hash_len = (size_t)(nl - hash_start);
+						} else {
+							hash_len = (size_t)(resp + resp_len - hash_start);
+						}
+
+						if (hash_len == CS_HASH_HEX_LEN) {
+							char hash_hex[CS_HASH_HEX_BUFSZ];
+							unsigned char *chunk_data = NULL;
+							size_t chunk_size = 0U;
+
+							memcpy(hash_hex, hash_start, CS_HASH_HEX_LEN);
+							hash_hex[CS_HASH_HEX_LEN] = '\0';
+
+							if (cs_chunk_store_get(chunk_store, hash_hex, &chunk_data, &chunk_size) == 0) {
+								if (cs_engine_sync_send_chunk(&client, hash_hex, chunk_data, chunk_size) == 0) {
+									sent_count++;
+									printf("    Sent chunk %s (%zu bytes)\n", hash_hex, chunk_size);
+								} else {
+									CS_LOG_WARN("engine: sync failed to send chunk %s", hash_hex);
+								}
+								free(chunk_data);
+							} else {
+								CS_LOG_WARN("engine: sync missing local chunk %s", hash_hex);
+							}
+						}
+
+						if (nl != NULL) {
+							hash_start = nl + 1;
+						} else {
+							break;
+						}
 					}
 				}
-				free(snapshots);
-			}
-			cs_snapshot_store_close(store);
 
-			if (cs_net_client_exchange_text(&client, CS_NET_MESSAGE_MANIFEST, manifest_text, strlen(manifest_text), &reply) == 0) {
-				printf("Remote response: %.*s\n", (int)reply.frame.payload_size, (const char *)reply.frame.payload);
-				cs_net_owned_frame_reset(&reply);
-				status = 0;
+				printf("    Sent %lu/%lu missing chunks\n", (unsigned long)sent_count, (unsigned long)missing_count);
 			}
+
+			cs_net_owned_frame_reset(&manifest_reply);
 		}
 	}
+
+	sync_ok = 1;
+	status = 0;
+
+cleanup:
+	free(snapshots);
 
 	{
 		cs_net_owned_frame_t bye_reply;
@@ -939,10 +1153,13 @@ static int cs_engine_do_sync(const char *repo_path, const char *remote) {
 		cs_net_owned_frame_reset(&bye_reply);
 	}
 
+	cs_chunk_store_close(chunk_store);
+	cs_snapshot_store_close(store);
 	cs_net_client_close(&client);
 
-	if (status == 0) {
+	if (sync_ok) {
 		CS_LOG_INFO("engine: sync complete to %s:%u", host, (unsigned)port);
+		printf("Sync completed successfully.\n");
 	} else {
 		CS_LOG_ERROR("engine: sync failed to %s:%u", host, (unsigned)port);
 	}

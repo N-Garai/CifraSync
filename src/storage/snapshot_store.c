@@ -97,6 +97,127 @@ static int snapshot_artifact_path(const char *repo_path, const char *snapshot_id
 	return 0;
 }
 
+static int cs_snapshot_store_load_existing(cs_snapshot_store_t *store) {
+#ifdef _WIN32
+	char pattern[4096];
+	WIN32_FIND_DATAA find_data;
+	HANDLE handle;
+
+	if (snprintf(pattern, sizeof(pattern), "%s\\*.snapshot", store->snapshots_path) < 0) {
+		return -1;
+	}
+
+	handle = FindFirstFileA(pattern, &find_data);
+	if (handle == INVALID_HANDLE_VALUE) {
+		return 0;
+	}
+
+	do {
+		char filepath[4096];
+		cs_snapshot_t snapshot;
+		FILE *fp;
+
+		if ((find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U) continue;
+
+		if (snprintf(filepath, sizeof(filepath), "%s\\%s", store->snapshots_path, find_data.cFileName) < 0) continue;
+
+		fp = fopen(filepath, "rb");
+		if (fp == NULL) continue;
+
+		memset(&snapshot, 0, sizeof(snapshot));
+		{
+			char line[512];
+			while (fgets(line, sizeof(line), fp) != NULL) {
+				char *nl = strchr(line, '\n');
+				if (nl) *nl = '\0';
+
+				if (strncmp(line, "id=", 3) == 0)
+					strncpy(snapshot.id, line + 3, sizeof(snapshot.id) - 1);
+				else if (strncmp(line, "timestamp=", 10) == 0)
+					snapshot.timestamp = (time_t)atol(line + 10);
+				else if (strncmp(line, "source_path=", 12) == 0)
+					strncpy(snapshot.source_path, line + 12, sizeof(snapshot.source_path) - 1);
+				else if (strncmp(line, "label=", 6) == 0)
+					strncpy(snapshot.label, line + 6, sizeof(snapshot.label) - 1);
+				else if (strncmp(line, "file_count=", 11) == 0)
+					snapshot.file_count = (unsigned long)atol(line + 11);
+				else if (strncmp(line, "size_bytes=", 11) == 0)
+					snapshot.size_bytes = strtoull(line + 11, NULL, 10);
+			}
+		}
+		fclose(fp);
+
+		if (snapshot.id[0] != '\0') {
+			if (store->count >= store->capacity) {
+				size_t new_cap = store->capacity * 2U;
+				cs_snapshot_t *new_arr = (cs_snapshot_t *)realloc(store->snapshots, new_cap * sizeof(cs_snapshot_t));
+				if (new_arr == NULL) continue;
+				store->snapshots = new_arr;
+				store->capacity = new_cap;
+			}
+			store->snapshots[store->count++] = snapshot;
+		}
+	} while (FindNextFileA(handle, &find_data) != 0);
+	FindClose(handle);
+	return 0;
+#else
+	DIR *dir = opendir(store->snapshots_path);
+	struct dirent *entry;
+
+	if (dir == NULL) return 0;
+
+	while ((entry = readdir(dir)) != NULL) {
+		const char *ext = strstr(entry->d_name, ".snapshot");
+		if (ext == NULL || ext[9] != '\0') continue;
+
+		char filepath[4096];
+		cs_snapshot_t snapshot;
+		FILE *fp;
+
+		if (snprintf(filepath, sizeof(filepath), "%s/%s", store->snapshots_path, entry->d_name) < 0) continue;
+
+		fp = fopen(filepath, "rb");
+		if (fp == NULL) continue;
+
+		memset(&snapshot, 0, sizeof(snapshot));
+		{
+			char line[512];
+			while (fgets(line, sizeof(line), fp) != NULL) {
+				char *nl = strchr(line, '\n');
+				if (nl) *nl = '\0';
+
+				if (strncmp(line, "id=", 3) == 0)
+					strncpy(snapshot.id, line + 3, sizeof(snapshot.id) - 1);
+				else if (strncmp(line, "timestamp=", 10) == 0)
+					snapshot.timestamp = (time_t)atol(line + 10);
+				else if (strncmp(line, "source_path=", 12) == 0)
+					strncpy(snapshot.source_path, line + 12, sizeof(snapshot.source_path) - 1);
+				else if (strncmp(line, "label=", 6) == 0)
+					strncpy(snapshot.label, line + 6, sizeof(snapshot.label) - 1);
+				else if (strncmp(line, "file_count=", 11) == 0)
+					snapshot.file_count = (unsigned long)atol(line + 11);
+				else if (strncmp(line, "size_bytes=", 11) == 0)
+					snapshot.size_bytes = strtoull(line + 11, NULL, 10);
+			}
+		}
+		fclose(fp);
+
+		if (snapshot.id[0] != '\0') {
+			if (store->count >= store->capacity) {
+				size_t new_cap = store->capacity * 2U;
+				cs_snapshot_t *new_arr = (cs_snapshot_t *)realloc(store->snapshots, new_cap * sizeof(cs_snapshot_t));
+				if (new_arr == NULL) continue;
+				store->snapshots = new_arr;
+				store->capacity = new_cap;
+			}
+			store->snapshots[store->count++] = snapshot;
+		}
+	}
+	closedir(dir);
+	return 0;
+#endif
+}
+
 cs_snapshot_store_t *cs_snapshot_store_open(const char *repo_path) {
 	cs_snapshot_store_t *store;
 	
@@ -129,6 +250,8 @@ cs_snapshot_store_t *cs_snapshot_store_open(const char *repo_path) {
 		free(store);
 		return NULL;
 	}
+
+	cs_snapshot_store_load_existing(store);
 	
 	return store;
 }
