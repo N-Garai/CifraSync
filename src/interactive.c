@@ -39,8 +39,9 @@ static void print_menu(void) {
     printf("  " BLD "5" RST "  " GRN "verify" RST "   " DIM "Verify integrity" RST "\n");
     printf("  " BLD "6" RST "  " GRN "prune" RST "    " DIM "Remove old snapshots" RST "\n");
     printf("  " BLD "7" RST "  " GRN "sync" RST "     " DIM "Remote sync" RST "\n");
-    printf("  " BLD "8" RST "  " GRN "help" RST "     " DIM "Show help" RST "\n");
-    printf("  " BLD RED "9" RST "  " RED "exit" RST "     " DIM "Quit" RST "\n");
+    printf("  " BLD "8" RST "  " GRN "serve" RST "    " DIM "Start server" RST "\n");
+    printf("  " BLD "9" RST "  " GRN "help" RST "     " DIM "Show help" RST "\n");
+    printf("  " BLD RED "0" RST "  " RED "exit" RST "     " DIM "Quit" RST "\n");
     printf("\n");
 }
 
@@ -110,14 +111,14 @@ int main_interactive(void) {
         }
 
         print_menu();
-        printf("  " BLD ">>" RST " Choice " DIM "(1-9)" RST ": ");
+        printf("  " BLD ">>" RST " Choice " DIM "(0-9)" RST ": ");
         fflush(stdout);
 
         if (!fgets(input, sizeof(input), stdin)) break;
         int choice = atoi(input);
         last_exit = 0;
 
-        if (choice == 9) {
+        if (choice == 0) {
             clear_screen();
             print_banner();
             printf("\n  " GRN "Thanks" RST " for using " BLD "CifraSync" RST "!\n\n");
@@ -202,6 +203,14 @@ int main_interactive(void) {
                 break;
 
             case 8:
+                printf("\n");
+                prompt_str("Bind address (HOST:PORT)", "0.0.0.0:9000", input, sizeof(input));
+                printf("\n  " YLW "..." RST " Starting server...\n\n");
+                argv[argc++] = "cifrasync"; argv[argc++] = "serve";
+                argv[argc++] = "--bind"; argv[argc++] = input;
+                break;
+
+            case 9:
                 printf("\n");
                 cs_print_help();
                 wait_enter();

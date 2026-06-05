@@ -24,6 +24,7 @@ const char *cs_command_to_string(cs_command_t command) {
 		case CS_CMD_VERIFY: return "verify";
 		case CS_CMD_PRUNE: return "prune";
 		case CS_CMD_SYNC: return "sync";
+		case CS_CMD_SERVE: return "serve";
 		default: return "unknown";
 	}
 }
@@ -49,6 +50,7 @@ static cs_command_t parse_command_token(const char *token) {
 	if (strcmp(token, "verify") == 0) return CS_CMD_VERIFY;
 	if (strcmp(token, "prune") == 0) return CS_CMD_PRUNE;
 	if (strcmp(token, "sync") == 0) return CS_CMD_SYNC;
+	if (strcmp(token, "serve") == 0) return CS_CMD_SERVE;
 	return CS_CMD_NONE;
 }
 
@@ -198,6 +200,15 @@ int cs_parse_cli(int argc, char **argv, cs_cli_options_t *options, char *error_b
 				return -1;
 			}
 			options->exclude_file = value;
+			++i;
+			continue;
+		}
+
+		if (strcmp(arg, "--bind") == 0) {
+			if (require_value(arg, value, error_buffer, error_buffer_size) != 0) {
+				return -1;
+			}
+			options->bind = value;
 			++i;
 			continue;
 		}

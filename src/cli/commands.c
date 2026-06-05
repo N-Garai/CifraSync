@@ -4,6 +4,7 @@
 #include "core/engine.h"
 #include "common/path.h"
 #include "storage/repo.h"
+#include "net/server.h"
 #include "util/config.h"
 
 #include <stdio.h>
@@ -42,6 +43,7 @@ void cs_print_help(void) {
 	puts("  verify     Verify stored data integrity");
 	puts("  prune      Remove old snapshots");
 	puts("  sync       Synchronize with remote repository");
+	puts("  serve      Start server for incoming sync connections");
 	puts("");
 	puts("Global options:");
 	puts("  -h, --help       Show help");
@@ -56,6 +58,7 @@ void cs_print_help(void) {
 	puts("  verify   --repo PATH");
 	puts("  prune    --repo PATH [--keep-last N] [--older-than DAYS]");
 	puts("  sync     --repo PATH --remote HOST:PORT");
+	puts("  serve    --bind HOST:PORT");
 }
 
 const char *cs_version(void) {
@@ -189,6 +192,46 @@ static int handle_sync(const cs_cli_options_t *options) {
 	return CS_OK;
 }
 
+static int handle_serve(const cs_cli_options_t *options) {
+	char host[256];
+	unsigned short port = 0;
+	const char *colon;
+
+	if (is_required_missing(options->bind)) {
+		fprintf(stderr, "serve requires --bind HOST:PORT\n");
+		return CS_ERR_USAGE;
+	}
+
+	colon = strchr(options->bind, ':');
+	if (colon == NULL) {
+		fprintf(stderr, "serve: --bind must be HOST:PORT format\n");
+		return CS_ERR_INVALID;
+	}
+
+	{
+		size_t host_len = (size_t)(colon - options->bind);
+		if (host_len >= sizeof(host)) host_len = sizeof(host) - 1;
+		memcpy(host, options->bind, host_len);
+		host[host_len] = '\0';
+	}
+
+	port = (unsigned short)atoi(colon + 1);
+	if (port == 0) {
+		fprintf(stderr, "serve: invalid port in '%s'\n", options->bind);
+		return CS_ERR_INVALID;
+	}
+
+	printf("Starting CifraSync server on %s:%u (Ctrl+C to stop)\n", host, (unsigned)port);
+	fflush(stdout);
+
+	if (cs_net_server_run(host, port, NULL, NULL, 0) != 0) {
+		fprintf(stderr, "serve: server failed: %s\n", cs_net_server_last_error());
+		return CS_ERR_INVALID;
+	}
+
+	return CS_OK;
+}
+
 int cs_run(int argc, char **argv) {
 	cs_cli_options_t options;
 	char error_buffer[128];
@@ -248,6 +291,9 @@ int cs_run(int argc, char **argv) {
 			break;
 		case CS_CMD_SYNC:
 			result = handle_sync(&options);
+			break;
+		case CS_CMD_SERVE:
+			result = handle_serve(&options);
 			break;
 		default:
 			fprintf(stderr, "Unknown command.\n");

@@ -82,10 +82,11 @@ When `cifrasync` is run with no arguments, it launches a colored interactive TUI
   5  verify   Verify integrity
   6  prune    Remove old snapshots
   7  sync     Remote sync
-  8  help     Show help
-  9  exit     Quit
+  8  serve    Start server
+  9  help     Show help
+  0  exit     Quit
 
-  >> Choice (1-9):
+  >> Choice (0-9):
 ```
 
 ### Option Reference
@@ -108,8 +109,9 @@ When `cifrasync` is run with no arguments, it launches a colored interactive TUI
 | 6 | `prune` | Remove old snapshots + orphan chunks | **Keep last N** — keep N newest snapshots | `7` |
 | | | | **Older than N days** — delete snapshots older than N days | `30` (blank = off) |
 | 7 | `sync` | Sync with remote server | **Remote host:port** — server address | `192.168.1.100:9000` |
-| 8 | `help` | Show CLI help text | None | — |
-| 9 | `exit` | Quit | None | — |
+| 8 | `serve` | Start server for incoming sync connections | **Bind address** — host:port to listen on | `0.0.0.0:9000` |
+| 9 | `help` | Show CLI help text | None | — |
+| 0 | `exit` | Quit | None | — |
 
 ---
 
@@ -125,6 +127,7 @@ cifrasync restore --repo PATH --snapshot ID --out PATH [--source-file PATH]
 cifrasync verify --repo PATH
 cifrasync prune --repo PATH [--keep-last N] [--older-than DAYS]
 cifrasync sync --repo PATH --remote HOST:PORT
+cifrasync serve --bind HOST:PORT
 ```
 
 ---

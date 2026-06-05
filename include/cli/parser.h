@@ -13,7 +13,8 @@ typedef enum {
 	CS_CMD_RESTORE,
 	CS_CMD_VERIFY,
 	CS_CMD_PRUNE,
-	CS_CMD_SYNC
+	CS_CMD_SYNC,
+	CS_CMD_SERVE
 } cs_command_t;
 
 typedef struct {
@@ -29,6 +30,7 @@ typedef struct {
 	const char *include_file;
 	const char *exclude_file;
 	const char *source_file;
+	const char *bind;
 	int dry_run;
 	int compress;
 	int encrypt;

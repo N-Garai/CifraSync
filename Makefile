@@ -253,7 +253,7 @@ $(BUILD_DIR)/journal.o: src/core/journal.c include/core/journal.h include/common
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/test_main.o: $(TEST_MAIN) tests/integration/test_support.h tests/unit/test_parser.c tests/unit/test_scanner.c tests/unit/test_chunker.c tests/unit/test_hash.c tests/unit/test_codec.c tests/unit/test_cipher.c tests/unit/test_repo.c tests/unit/test_index_store.c tests/unit/test_snapshot_store.c tests/integration/test_backup_restore.c tests/integration/test_incremental_resume.c tests/integration/test_remote_sync.c tests/integration/test_verify_prune.c
+$(BUILD_DIR)/test_main.o: $(TEST_MAIN) include/cli/parser.h tests/integration/test_support.h tests/unit/test_parser.c tests/unit/test_scanner.c tests/unit/test_chunker.c tests/unit/test_hash.c tests/unit/test_codec.c tests/unit/test_cipher.c tests/unit/test_repo.c tests/unit/test_index_store.c tests/unit/test_snapshot_store.c tests/integration/test_backup_restore.c tests/integration/test_incremental_resume.c tests/integration/test_remote_sync.c tests/integration/test_verify_prune.c
 >@$(call MKDIR,$(BUILD_DIR))
 >$(CC) $(CFLAGS) -c $< -o $@
 
