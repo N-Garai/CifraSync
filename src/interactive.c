@@ -53,6 +53,7 @@ static void prompt_str(const char *label, const char *def, char *out, size_t out
     }
     if (!fgets(buf, sizeof(buf), stdin)) { out[0] = '\0'; return; }
     buf[strcspn(buf, "\n")] = '\0';
+    buf[strcspn(buf, "\r")] = '\0';
     if (buf[0]) {
         strncpy(out, buf, out_size - 1);
         out[out_size - 1] = '\0';
