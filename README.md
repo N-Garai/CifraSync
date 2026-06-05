@@ -108,8 +108,9 @@ When `cifrasync` is run with no arguments, it launches a colored interactive TUI
 | 5 | `verify` | Check chunk integrity | None | — |
 | 6 | `prune` | Remove old snapshots + orphan chunks | **Keep last N** — keep N newest snapshots | `7` |
 | | | | **Older than N days** — delete snapshots older than N days | `30` (blank = off) |
-| 7 | `sync` | Sync with remote server | **Remote host:port** — server address | `192.168.1.100:9000` |
+| 7 | `sync` | Sync with remote server (full manifest + chunk transfer) | **Remote host:port** — server address | `192.168.1.100:9000` |
 | 8 | `serve` | Start server for incoming sync connections | **Bind address** — host:port to listen on | `0.0.0.0:9000` |
+| | | | **Repo path** — repository to receive data into | `C:\repo` (blank = ACK-only, no storage) |
 | 9 | `help` | Show CLI help text | None | — |
 | 0 | `exit` | Quit | None | — |
 
@@ -127,7 +128,7 @@ cifrasync restore --repo PATH --snapshot ID --out PATH [--source-file PATH]
 cifrasync verify --repo PATH
 cifrasync prune --repo PATH [--keep-last N] [--older-than DAYS]
 cifrasync sync --repo PATH --remote HOST:PORT
-cifrasync serve --bind HOST:PORT
+cifrasync serve --bind HOST:PORT [--repo PATH]
 ```
 
 ---
@@ -146,7 +147,7 @@ cifrasync serve --bind HOST:PORT
 | Data integrity verify | Done | Re-reads all chunks, recomputes SHA-256 |
 | Snapshot prune | Done | `--keep-last N`, `--older-than DAYS` |
 | Orphan chunk GC | Done | Deletes unreferenced chunks after prune |
-| Remote TCP sync | Done | Client/server with frame protocol |
+| Remote TCP sync | Done | Full manifest + chunk data transfer; incremental (only sends missing chunks) |
 | Include/exclude files | Done | Glob-pattern-based file filtering |
 | Atomic manifest writes | Done | `.tmp` + `rename()` |
 | Journal replay | Done | Auto-resume on interrupted backup |

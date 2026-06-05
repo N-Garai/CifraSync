@@ -425,6 +425,10 @@ int cs_net_server_sync_handler(const cs_net_frame_t *request, cs_net_owned_frame
 		size_t payload_size = request->payload_size;
 		const char *first_nl;
 		size_t header_len;
+		char snap_path[CS_PATH_CAP] = "";
+		char manifest_path[CS_PATH_CAP] = "";
+		int wrote_snap = 0;
+		int wrote_manifest = 0;
 
 		if (cs_sync_repo_path[0] == '\0') {
 			snprintf(reply_text, sizeof(reply_text), "ACK MANIFEST no-repo");
@@ -462,7 +466,6 @@ int cs_net_server_sync_handler(const cs_net_frame_t *request, cs_net_owned_frame
 			{
 				char snap_dir[CS_PATH_CAP];
 				char snap_name[CS_PATH_CAP];
-				char snap_path[CS_PATH_CAP];
 				size_t idx, dst;
 				FILE *fp;
 
@@ -481,8 +484,9 @@ int cs_net_server_sync_handler(const cs_net_frame_t *request, cs_net_owned_frame
 				}
 				snap_name[dst] = '\0';
 
-				if (snprintf(snap_path, sizeof(snap_path), "%s%c%s.snapshot", snap_dir, cs_path_separator(), snap_name) < 0) {
-					snprintf(reply_text, sizeof(reply_text), "ERROR failed to build snapshot path");
+				if (snprintf(snap_path, sizeof(snap_path), "%s%c%s.snapshot", snap_dir, cs_path_separator(), snap_name) < 0 ||
+					snprintf(manifest_path, sizeof(manifest_path), "%s%c%s.manifest", snap_dir, cs_path_separator(), snap_name) < 0) {
+					snprintf(reply_text, sizeof(reply_text), "ERROR failed to build artifact paths");
 					break;
 				}
 
@@ -498,13 +502,15 @@ int cs_net_server_sync_handler(const cs_net_frame_t *request, cs_net_owned_frame
 				fprintf(fp, "file_count=%lu\n", files);
 				fprintf(fp, "size_bytes=%llu\n", size);
 				fclose(fp);
+				wrote_snap = 1;
 			}
 
 			if (cs_sync_store_manifest(snapshot_id, payload + header_len + 1U, payload_size - header_len - 1U) != 0) {
 				snprintf(reply_text, sizeof(reply_text), "ERROR failed to store manifest for %s", snapshot_id);
-				cs_snapshot_store_delete(cs_sync_snapshot_store, snapshot_id);
+				if (wrote_snap) remove(snap_path);
 				break;
 			}
+			wrote_manifest = 1;
 
 			{
 				char **missing_hashes = NULL;
@@ -513,7 +519,8 @@ int cs_net_server_sync_handler(const cs_net_frame_t *request, cs_net_owned_frame
 				if (cs_sync_collect_missing_hashes(payload + header_len + 1U, payload_size - header_len - 1U,
 						&missing_hashes, &missing_count) != 0) {
 					snprintf(reply_text, sizeof(reply_text), "ERROR failed to check chunks for %s", snapshot_id);
-					cs_snapshot_store_delete(cs_sync_snapshot_store, snapshot_id);
+					if (wrote_snap) remove(snap_path);
+					if (wrote_manifest) remove(manifest_path);
 					break;
 				}
 
@@ -531,6 +538,8 @@ int cs_net_server_sync_handler(const cs_net_frame_t *request, cs_net_owned_frame
 					if (reply_buf == NULL) {
 						for (size_t i = 0U; i < missing_count; ++i) cs_free(missing_hashes[i]);
 						cs_free(missing_hashes);
+						if (wrote_snap) remove(snap_path);
+						if (wrote_manifest) remove(manifest_path);
 						snprintf(reply_text, sizeof(reply_text), "ERROR out of memory");
 						break;
 					}
