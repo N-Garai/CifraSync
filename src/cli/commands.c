@@ -3,22 +3,12 @@
 
 #include "core/engine.h"
 #include "common/path.h"
+#include "storage/repo.h"
 #include "util/config.h"
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#ifdef _WIN32
-#include <direct.h>
-#include <windows.h>
-#define cs_mkdir(path) _mkdir(path)
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#define cs_mkdir(path) mkdir(path, 0777)
-#endif
 
 enum {
 	CS_OK = 0,
@@ -29,73 +19,6 @@ enum {
 };
 
 static const char *k_version = "0.1.0";
-
-static int path_join(char *buffer, size_t buffer_size, const char *left, const char *right) {
-	int written;
-	if (buffer == NULL || left == NULL || right == NULL || buffer_size == 0) {
-		return -1;
-	}
-
-#ifdef _WIN32
-	written = snprintf(buffer, buffer_size, "%s\\%s", left, right);
-#else
-	written = snprintf(buffer, buffer_size, "%s/%s", left, right);
-#endif
-	if (written < 0 || (size_t)written >= buffer_size) {
-		return -1;
-	}
-	return 0;
-}
-
-static int ensure_directory(const char *path) {
-	if (path == NULL || path[0] == '\0') {
-		return -1;
-	}
-	if (cs_mkdir(path) == 0) {
-		return 0;
-	}
-	if (errno == EEXIST) {
-		return 0;
-	}
-	return -1;
-}
-
-static int ensure_repo_layout(const char *repo_path) {
-	char buffer[CS_PATH_CAP];
-	const char *dirs[] = {"chunks", "snapshots", "index", "journal", "locks"};
-	size_t i;
-
-	if (ensure_directory(repo_path) != 0) {
-		return -1;
-	}
-
-	for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
-		if (path_join(buffer, sizeof(buffer), repo_path, dirs[i]) != 0) {
-			return -1;
-		}
-		if (ensure_directory(buffer) != 0) {
-			return -1;
-		}
-	}
-
-	if (path_join(buffer, sizeof(buffer), repo_path, "repo.meta") != 0) {
-		return -1;
-	}
-
-	FILE *meta = fopen(buffer, "wb");
-	if (meta == NULL) {
-		return -1;
-	}
-	fprintf(meta, "name=CifraSync\n");
-	fprintf(meta, "version=1\n");
-#ifdef _WIN32
-	fprintf(meta, "platform=windows\n");
-#else
-	fprintf(meta, "platform=linux\n");
-#endif
-	fclose(meta);
-	return 0;
-}
 
 static int is_required_missing(const char *value) {
 	return value == NULL || value[0] == '\0';
@@ -142,21 +65,16 @@ const char *cs_version(void) {
 
 
 static int handle_init(const cs_cli_options_t *options) {
-	char buffer[CS_PATH_CAP];
+	cs_repo_t repo;
 	if (is_required_missing(options->repo)) {
 		fprintf(stderr, "init requires --repo PATH\n");
 		return CS_ERR_USAGE;
 	}
-	if (ensure_repo_layout(options->repo) != 0) {
-		perror("init failed");
-		return CS_ERR_INVALID;
-	}
-	if (path_join(buffer, sizeof(buffer), options->repo, "repo.meta") != 0) {
-		fprintf(stderr, "init: failed to resolve repo meta path\n");
+	if (cs_repo_init(options->repo, &repo) != 0) {
+		fprintf(stderr, "init failed for '%s'\n", options->repo);
 		return CS_ERR_INVALID;
 	}
 	printf("Initialized repository at %s\n", options->repo);
-	printf("Metadata file: %s\n", buffer);
 	return CS_OK;
 }
 

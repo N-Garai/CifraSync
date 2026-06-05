@@ -1,4 +1,5 @@
 #include "storage/index_store.h"
+#include "common/path.h"
 #include "util/io_utils.h"
 
 #include <stdio.h>
@@ -22,23 +23,6 @@ typedef struct cs_index_store {
 	size_t entry_count;
 	size_t capacity;
 } cs_index_store_t;
-
-static int path_join(char *buffer, size_t buffer_size, const char *left, const char *right) {
-	int written;
-	if (buffer == NULL || left == NULL || right == NULL || buffer_size == 0) {
-		return -1;
-	}
-
-#ifdef _WIN32
-	written = snprintf(buffer, buffer_size, "%s\\%s", left, right);
-#else
-	written = snprintf(buffer, buffer_size, "%s/%s", left, right);
-#endif
-	if (written < 0 || (size_t)written >= buffer_size) {
-		return -1;
-	}
-	return 0;
-}
 
 static int expand_capacity(cs_index_store_t *store) {
 	cs_index_entry_t *new_entries;
@@ -81,12 +65,12 @@ cs_index_store_t *cs_index_store_open(const char *repo_path) {
 	memset(store, 0, sizeof(*store));
 	strncpy(store->repo_path, repo_path, sizeof(store->repo_path) - 1);
 	
-	if (path_join(index_dir, sizeof(index_dir), repo_path, CS_INDEX_DIR) != 0) {
+	if (cs_path_join(index_dir, sizeof(index_dir), repo_path, CS_INDEX_DIR) != 0) {
 		free(store);
 		return NULL;
 	}
 	
-	if (path_join(store->index_path, sizeof(store->index_path), 
+	if (cs_path_join(store->index_path, sizeof(store->index_path), 
 	              index_dir, CS_INDEX_FILE) != 0) {
 		free(store);
 		return NULL;

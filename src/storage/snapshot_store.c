@@ -1,4 +1,5 @@
 #include "storage/snapshot_store.h"
+#include "common/path.h"
 #include "util/io_utils.h"
 #include "util/time_utils.h"
 
@@ -12,7 +13,6 @@
 #include <direct.h>
 #include <windows.h>
 #define cs_mkdir(path) _mkdir(path)
-#define snprintf _snprintf
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -31,23 +31,6 @@ typedef struct cs_snapshot_store {
 	size_t count;
 	size_t capacity;
 } cs_snapshot_store_t;
-
-static int path_join(char *buffer, size_t buffer_size, const char *left, const char *right) {
-	int written;
-	if (buffer == NULL || left == NULL || right == NULL || buffer_size == 0) {
-		return -1;
-	}
-
-#ifdef _WIN32
-	written = snprintf(buffer, buffer_size, "%s\\%s", left, right);
-#else
-	written = snprintf(buffer, buffer_size, "%s/%s", left, right);
-#endif
-	if (written < 0 || (size_t)written >= buffer_size) {
-		return -1;
-	}
-	return 0;
-}
 
 static int ensure_directory(const char *path) {
 	if (path == NULL || path[0] == '\0') {
@@ -102,10 +85,10 @@ static int snapshot_artifact_path(const char *repo_path, const char *snapshot_id
 	if (snapshot_filename_component(snapshot_id, snapshot_name, sizeof(snapshot_name)) != 0) {
 		return -1;
 	}
-	if (path_join(snapshots_path, sizeof(snapshots_path), repo_path, CS_SNAPSHOTS_DIR) != 0) {
+	if (cs_path_join(snapshots_path, sizeof(snapshots_path), repo_path, CS_SNAPSHOTS_DIR) != 0) {
 		return -1;
 	}
-	if (path_join(snapshot_base, sizeof(snapshot_base), snapshots_path, snapshot_name) != 0) {
+	if (cs_path_join(snapshot_base, sizeof(snapshot_base), snapshots_path, snapshot_name) != 0) {
 		return -1;
 	}
 	if (snprintf(out, out_size, "%s%s", snapshot_base, suffix) < 0 || strlen(out) + 1U > out_size) {
@@ -129,7 +112,7 @@ cs_snapshot_store_t *cs_snapshot_store_open(const char *repo_path) {
 	memset(store, 0, sizeof(*store));
 	strncpy(store->repo_path, repo_path, sizeof(store->repo_path) - 1);
 	
-	if (path_join(store->snapshots_path, sizeof(store->snapshots_path),
+	if (cs_path_join(store->snapshots_path, sizeof(store->snapshots_path),
 	              repo_path, CS_SNAPSHOTS_DIR) != 0) {
 		free(store);
 		return NULL;
@@ -187,7 +170,7 @@ int cs_snapshot_store_create(cs_snapshot_store_t *store, const char *source_path
 	snapshot->file_count = 0;
 	snapshot->size_bytes = 0;
 	
-	if (path_join(snapshot_path, sizeof(snapshot_path), store->snapshots_path,
+	if (cs_path_join(snapshot_path, sizeof(snapshot_path), store->snapshots_path,
 	              snapshot->id) != 0) {
 		return -1;
 	}
@@ -265,7 +248,7 @@ int cs_snapshot_store_update(cs_snapshot_store_t *store, const cs_snapshot_t *sn
 		if (strcmp(store->snapshots[i].id, snapshot->id) == 0) {
 			memcpy(&store->snapshots[i], snapshot, sizeof(*snapshot));
 			
-			if (path_join(snapshot_path, sizeof(snapshot_path), 
+			if (cs_path_join(snapshot_path, sizeof(snapshot_path), 
 			              store->snapshots_path, snapshot->id) != 0) {
 				return -1;
 			}
@@ -303,7 +286,7 @@ int cs_snapshot_store_delete(cs_snapshot_store_t *store, const char *snapshot_id
 	
 	for (i = 0; i < store->count; ++i) {
 		if (strcmp(store->snapshots[i].id, snapshot_id) == 0) {
-			if (path_join(snapshot_path, sizeof(snapshot_path),
+			if (cs_path_join(snapshot_path, sizeof(snapshot_path),
 			              store->snapshots_path, snapshot_id) != 0) {
 				return -1;
 			}

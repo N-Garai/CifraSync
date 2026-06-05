@@ -1,4 +1,5 @@
 #include "storage/chunk_store.h"
+#include "common/path.h"
 #include "util/io_utils.h"
 
 #include <stdio.h>
@@ -24,23 +25,6 @@ typedef struct cs_chunk_store {
 	char repo_path[4096];
 	char chunks_path[4096];
 } cs_chunk_store_t;
-
-static int path_join(char *buffer, size_t buffer_size, const char *left, const char *right) {
-	int written;
-	if (buffer == NULL || left == NULL || right == NULL || buffer_size == 0) {
-		return -1;
-	}
-
-#ifdef _WIN32
-	written = snprintf(buffer, buffer_size, "%s\\%s", left, right);
-#else
-	written = snprintf(buffer, buffer_size, "%s/%s", left, right);
-#endif
-	if (written < 0 || (size_t)written >= buffer_size) {
-		return -1;
-	}
-	return 0;
-}
 
 static int ensure_directory(const char *path) {
 	if (path == NULL || path[0] == '\0') {
@@ -72,7 +56,7 @@ static int get_chunk_path(const char *chunks_dir, const char *hash_hex,
 	strncpy(prefix, hash_hex, 2);
 	prefix[2] = '\0';
 	
-	if (path_join(prefix_dir, sizeof(prefix_dir), chunks_dir, prefix) != 0) {
+	if (cs_path_join(prefix_dir, sizeof(prefix_dir), chunks_dir, prefix) != 0) {
 		return -1;
 	}
 	
@@ -80,7 +64,7 @@ static int get_chunk_path(const char *chunks_dir, const char *hash_hex,
 		return -1;
 	}
 	
-	if (path_join(chunk_path, chunk_path_size, prefix_dir, hash_hex) != 0) {
+	if (cs_path_join(chunk_path, chunk_path_size, prefix_dir, hash_hex) != 0) {
 		return -1;
 	}
 	
@@ -101,7 +85,7 @@ cs_chunk_store_t *cs_chunk_store_open(const char *repo_path) {
 	
 	strncpy(store->repo_path, repo_path, sizeof(store->repo_path) - 1);
 	
-	if (path_join(store->chunks_path, sizeof(store->chunks_path), 
+	if (cs_path_join(store->chunks_path, sizeof(store->chunks_path), 
 	              repo_path, CS_CHUNKS_DIR) != 0) {
 		free(store);
 		return NULL;

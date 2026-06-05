@@ -1,4 +1,5 @@
 #include "storage/repo.h"
+#include "common/path.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,23 +19,6 @@
 
 #define CS_REPO_VERSION "1"
 #define CS_REPO_META_FILE "repo.meta"
-
-static int path_join(char *buffer, size_t buffer_size, const char *left, const char *right) {
-	int written;
-	if (buffer == NULL || left == NULL || right == NULL || buffer_size == 0) {
-		return -1;
-	}
-
-#ifdef _WIN32
-	written = snprintf(buffer, buffer_size, "%s\\%s", left, right);
-#else
-	written = snprintf(buffer, buffer_size, "%s/%s", left, right);
-#endif
-	if (written < 0 || (size_t)written >= buffer_size) {
-		return -1;
-	}
-	return 0;
-}
 
 static int ensure_directory(const char *path) {
 	if (path == NULL || path[0] == '\0') {
@@ -67,7 +51,7 @@ int cs_repo_init(const char *repo_path, cs_repo_t *repo) {
 
 	for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
 		char dir_path[4096];
-		if (path_join(dir_path, sizeof(dir_path), repo_path, dirs[i]) != 0) {
+		if (cs_path_join(dir_path, sizeof(dir_path), repo_path, dirs[i]) != 0) {
 			return -1;
 		}
 		if (ensure_directory(dir_path) != 0) {
@@ -75,7 +59,7 @@ int cs_repo_init(const char *repo_path, cs_repo_t *repo) {
 		}
 	}
 
-	if (path_join(meta_path, sizeof(meta_path), repo_path, CS_REPO_META_FILE) != 0) {
+	if (cs_path_join(meta_path, sizeof(meta_path), repo_path, CS_REPO_META_FILE) != 0) {
 		return -1;
 	}
 
@@ -121,7 +105,7 @@ int cs_repo_load(const char *repo_path, cs_repo_t *repo) {
 		return -1;
 	}
 
-	if (path_join(meta_path, sizeof(meta_path), repo_path, CS_REPO_META_FILE) != 0) {
+	if (cs_path_join(meta_path, sizeof(meta_path), repo_path, CS_REPO_META_FILE) != 0) {
 		return -1;
 	}
 
@@ -161,7 +145,7 @@ int cs_repo_save(const cs_repo_t *repo) {
 		return -1;
 	}
 
-	if (path_join(meta_path, sizeof(meta_path), repo->path, CS_REPO_META_FILE) != 0) {
+	if (cs_path_join(meta_path, sizeof(meta_path), repo->path, CS_REPO_META_FILE) != 0) {
 		return -1;
 	}
 
@@ -190,7 +174,7 @@ int cs_repo_exists(const char *repo_path) {
 		return 0;
 	}
 
-	if (path_join(meta_path, sizeof(meta_path), repo_path, CS_REPO_META_FILE) != 0) {
+	if (cs_path_join(meta_path, sizeof(meta_path), repo_path, CS_REPO_META_FILE) != 0) {
 		return 0;
 	}
 
@@ -214,7 +198,7 @@ int cs_repo_validate(const char *repo_path) {
 	}
 
 	for (i = 0; i < sizeof(required_dirs) / sizeof(required_dirs[0]); ++i) {
-		if (path_join(check_path, sizeof(check_path), repo_path, required_dirs[i]) != 0) {
+		if (cs_path_join(check_path, sizeof(check_path), repo_path, required_dirs[i]) != 0) {
 			return -1;
 		}
 		fp = fopen(check_path, "rb");
