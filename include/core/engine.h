@@ -9,7 +9,8 @@ extern "C" {
 
 int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run, int compress, int encrypt, const char *label,
 					 const char *const *include_patterns, size_t include_count,
-					 const char *const *exclude_patterns, size_t exclude_count);
+					 const char *const *exclude_patterns, size_t exclude_count,
+					 const char *passphrase);
 int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char *out_path, const char *passphrase);
 int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const char *source_file, const char *out_path, const char *passphrase);
 int cs_engine_verify(const char *repo_path, const char *passphrase);

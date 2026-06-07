@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "integration/test_backup_restore.c"
+#include "integration/test_encrypted_backup.c"
 #include "integration/test_incremental_resume.c"
 #include "integration/test_remote_sync.c"
 #include "integration/test_verify_prune.c"
@@ -47,6 +48,7 @@ int main(void) {
 		{"unit_snapshot_store", cs_unit_test_snapshot_store},
 		{"unit_scanner", cs_unit_test_scanner},
 		{"integration_backup_restore", cs_integration_test_backup_restore},
+		{"integration_encrypted_backup", cs_integration_test_encrypted_backup},
 		{"integration_incremental_resume", cs_integration_test_incremental_resume},
 		{"integration_remote_sync", cs_integration_test_remote_sync},
 		{"integration_verify_prune", cs_integration_test_verify_prune},

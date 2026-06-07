@@ -156,7 +156,7 @@ static int handle_backup(const cs_cli_options_t *options) {
 	result = cs_engine_backup(options->source, options->repo,
 							  options->dry_run, options->compress, options->encrypt, options->label,
 							  (const char *const *)include_patterns, include_count,
-							  (const char *const *)exclude_patterns, exclude_count);
+							  (const char *const *)exclude_patterns, exclude_count, NULL);
 
 	cs_path_free_patterns(include_patterns, include_count);
 	cs_path_free_patterns(exclude_patterns, exclude_count);

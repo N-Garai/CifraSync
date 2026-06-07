@@ -105,11 +105,14 @@ int cs_lock_acquire(const char *repo_path, cs_lock_mode_t mode, cs_lock_t **out_
 			return -1;
 		}
 
-		if (mode == CS_LOCK_EXCLUSIVE) {
+		{
 			OVERLAPPED overlapped;
+			DWORD lock_flags = LOCKFILE_FAIL_IMMEDIATELY;
 			memset(&overlapped, 0, sizeof(overlapped));
-			if (LockFileEx(lock->file_handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
-					0, 1, 0, &overlapped) == 0) {
+			if (mode == CS_LOCK_EXCLUSIVE) {
+				lock_flags |= LOCKFILE_EXCLUSIVE_LOCK;
+			}
+			if (LockFileEx(lock->file_handle, lock_flags, 0, 1, 0, &overlapped) == 0) {
 				CloseHandle(lock->file_handle);
 				cs_free(lock);
 				return -1;
@@ -146,10 +149,6 @@ int cs_lock_acquire(const char *repo_path, cs_lock_mode_t mode, cs_lock_t **out_
 	return 0;
 }
 
-int cs_lock_try_acquire(const char *repo_path, cs_lock_mode_t mode, cs_lock_t **out_lock) {
-	return cs_lock_acquire(repo_path, mode, out_lock);
-}
-
 void cs_lock_release(cs_lock_t *lock) {
 	if (lock == NULL) {
 		return;
@@ -157,11 +156,9 @@ void cs_lock_release(cs_lock_t *lock) {
 
 #ifdef _WIN32
 	if (lock->file_handle != INVALID_HANDLE_VALUE) {
-		if (lock->mode == CS_LOCK_EXCLUSIVE) {
-			OVERLAPPED overlapped;
-			memset(&overlapped, 0, sizeof(overlapped));
-			UnlockFileEx(lock->file_handle, 0, 1, 0, &overlapped);
-		}
+		OVERLAPPED overlapped;
+		memset(&overlapped, 0, sizeof(overlapped));
+		UnlockFileEx(lock->file_handle, 0, 1, 0, &overlapped);
 		CloseHandle(lock->file_handle);
 	}
 #else

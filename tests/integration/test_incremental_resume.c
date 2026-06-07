@@ -32,7 +32,7 @@ int cs_integration_test_incremental_resume(void) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("repo initialization failed");
 	}
-	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-incremental-1", NULL, 0U, NULL, 0U) != 0) {
+	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-incremental-1", NULL, 0U, NULL, 0U, NULL) != 0) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("first backup failed");
 	}
@@ -42,9 +42,9 @@ int cs_integration_test_incremental_resume(void) {
 		return cs_it_fail("failed to count backup artifacts after first run");
 	}
 
-	Sleep(1100);
+	Sleep(1101);
 
-	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-incremental-2", NULL, 0U, NULL, 0U) != 0) {
+	if (cs_engine_backup(source_root, repo_root, 0, 0, 0, "integration-incremental-2", NULL, 0U, NULL, 0U, NULL) != 0) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("second backup failed");
 	}

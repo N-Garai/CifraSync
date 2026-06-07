@@ -1,4 +1,5 @@
 #include "crypto/cipher.h"
+#include "crypto/key_cache.h"
 
 #include "common/memory.h"
 
@@ -8,6 +9,9 @@
 #include <string.h>
 
 static const unsigned char cs_cipher_magic[CS_CRYPTO_BLOB_MAGIC_SIZE] = {'C', 'S', 'E', 'N', 'C', '0', '0', '1'};
+
+static cs_key_cache_t g_cipher_key_cache;
+static int g_cipher_key_cache_valid = 0;
 
 static void cs_write_u64_le(unsigned char *out, cs_u64 value) {
 	for (size_t index = 0; index < 8U; ++index) {
@@ -81,7 +85,15 @@ static int cs_cipher_parse_header(const void *blob, size_t blob_size, cs_cipher_
 }
 
 static int cs_cipher_derive_key(const char *passphrase, const cs_cipher_blob_header_t *header, unsigned char out_key[CS_CRYPTO_SHA256_SIZE]) {
+	if (g_cipher_key_cache_valid) {
+		return cs_key_cache_derive(&g_cipher_key_cache, passphrase, header->salt, CS_CRYPTO_SALT_SIZE, header->rounds, out_key, CS_CRYPTO_SHA256_SIZE);
+	}
 	return cs_kdf_derive_key(passphrase, header->salt, CS_CRYPTO_SALT_SIZE, header->rounds, out_key, CS_CRYPTO_SHA256_SIZE);
+}
+
+static void cs_cipher_derive_sub_keys(const unsigned char master_key[CS_CRYPTO_SHA256_SIZE], unsigned char out_enc_key[CS_CRYPTO_SHA256_SIZE], unsigned char out_mac_key[CS_CRYPTO_SHA256_SIZE]) {
+	cs_kdf_hmac_sha256(master_key, CS_CRYPTO_SHA256_SIZE, "enc-key", 7U, out_enc_key);
+	cs_kdf_hmac_sha256(master_key, CS_CRYPTO_SHA256_SIZE, "mac-key", 7U, out_mac_key);
 }
 
 static int cs_cipher_seal_internal(const char *passphrase,
@@ -93,7 +105,9 @@ static int cs_cipher_seal_internal(const char *passphrase,
 	cs_cipher_blob_header_t header;
 	unsigned char salt[CS_CRYPTO_SALT_SIZE];
 	unsigned char nonce[CS_CRYPTO_NONCE_SIZE];
-	unsigned char key[CS_CRYPTO_SHA256_SIZE];
+	unsigned char master_key[CS_CRYPTO_SHA256_SIZE];
+	unsigned char enc_key[CS_CRYPTO_SHA256_SIZE];
+	unsigned char mac_key[CS_CRYPTO_SHA256_SIZE];
 	unsigned char tag[CS_CRYPTO_TAG_SIZE];
 	cs_hmac_sha256_ctx_t tag_ctx;
 	const unsigned char *plain_bytes = (const unsigned char *)plaintext;
@@ -112,10 +126,10 @@ static int cs_cipher_seal_internal(const char *passphrase,
 		return -1;
 	}
 
-	if (cs_kdf_generate_salt(salt, sizeof(salt)) != 0) {
+	if (cs_kdf_generate_random(salt, sizeof(salt)) != 0) {
 		return -1;
 	}
-	if (cs_kdf_generate_salt(nonce, sizeof(nonce)) != 0) {
+	if (cs_kdf_generate_random(nonce, sizeof(nonce)) != 0) {
 		cs_memzero(salt, sizeof(salt));
 		return -1;
 	}
@@ -125,23 +139,25 @@ static int cs_cipher_seal_internal(const char *passphrase,
 		cs_memzero(nonce, sizeof(nonce));
 		return -1;
 	}
-	if (cs_cipher_derive_key(passphrase, &header, key) != 0) {
+	if (cs_cipher_derive_key(passphrase, &header, master_key) != 0) {
 		cs_memzero(salt, sizeof(salt));
 		cs_memzero(nonce, sizeof(nonce));
 		cs_memzero(&header, sizeof(header));
 		return -1;
 	}
 
+	cs_cipher_derive_sub_keys(master_key, enc_key, mac_key);
+
 	memcpy(blob, &header, sizeof(header));
 	cipher_bytes = blob + sizeof(header);
-	cs_hmac_sha256_init(&tag_ctx, key, sizeof(key));
+	cs_hmac_sha256_init(&tag_ctx, mac_key, sizeof(mac_key));
 	cs_hmac_sha256_update(&tag_ctx, &header, sizeof(header));
 
 	for (size_t offset = 0U; offset < plaintext_size; offset += CS_CRYPTO_SHA256_SIZE) {
 		unsigned char stream[CS_CRYPTO_SHA256_SIZE];
 		const size_t chunk_size = (plaintext_size - offset) < CS_CRYPTO_SHA256_SIZE ? (plaintext_size - offset) : CS_CRYPTO_SHA256_SIZE;
 		const cs_u64 block_index = (cs_u64)(offset / CS_CRYPTO_SHA256_SIZE);
-		cs_cipher_stream_block(key, nonce, block_index, stream);
+		cs_cipher_stream_block(enc_key, nonce, block_index, stream);
 		for (size_t index = 0U; index < chunk_size; ++index) {
 			cipher_bytes[offset + index] = (unsigned char)(plain_bytes[offset + index] ^ stream[index]);
 		}
@@ -155,7 +171,9 @@ static int cs_cipher_seal_internal(const char *passphrase,
 
 	cs_memzero(salt, sizeof(salt));
 	cs_memzero(nonce, sizeof(nonce));
-	cs_memzero(key, sizeof(key));
+	cs_memzero(master_key, sizeof(master_key));
+	cs_memzero(enc_key, sizeof(enc_key));
+	cs_memzero(mac_key, sizeof(mac_key));
 	cs_memzero(tag, sizeof(tag));
 	cs_memzero(&tag_ctx, sizeof(tag_ctx));
 	cs_memzero(&header, sizeof(header));
@@ -171,7 +189,9 @@ static int cs_cipher_open_internal(const char *passphrase,
 	cs_cipher_blob_header_t header;
 	const unsigned char *cipher_bytes;
 	const unsigned char *tag_bytes;
-	unsigned char key[CS_CRYPTO_SHA256_SIZE];
+	unsigned char master_key[CS_CRYPTO_SHA256_SIZE];
+	unsigned char enc_key[CS_CRYPTO_SHA256_SIZE];
+	unsigned char mac_key[CS_CRYPTO_SHA256_SIZE];
 	unsigned char expected_tag[CS_CRYPTO_TAG_SIZE];
 	cs_hmac_sha256_ctx_t tag_ctx;
 	unsigned char *plain_bytes = (unsigned char *)plaintext;
@@ -185,18 +205,22 @@ static int cs_cipher_open_internal(const char *passphrase,
 	if ((size_t)header.plaintext_size > plaintext_capacity) {
 		return -1;
 	}
-	if (cs_cipher_derive_key(passphrase, &header, key) != 0) {
+	if (cs_cipher_derive_key(passphrase, &header, master_key) != 0) {
 		cs_memzero(&header, sizeof(header));
 		return -1;
 	}
 
-	cs_hmac_sha256_init(&tag_ctx, key, sizeof(key));
+	cs_cipher_derive_sub_keys(master_key, enc_key, mac_key);
+
+	cs_hmac_sha256_init(&tag_ctx, mac_key, sizeof(mac_key));
 	cs_hmac_sha256_update(&tag_ctx, &header, sizeof(header));
 	cs_hmac_sha256_update(&tag_ctx, cipher_bytes, (size_t)header.plaintext_size);
 	cs_hmac_sha256_final(&tag_ctx, expected_tag);
 
 	if (!cs_constant_time_equal(expected_tag, tag_bytes, sizeof(expected_tag))) {
-		cs_memzero(key, sizeof(key));
+		cs_memzero(master_key, sizeof(master_key));
+		cs_memzero(enc_key, sizeof(enc_key));
+		cs_memzero(mac_key, sizeof(mac_key));
 		cs_memzero(expected_tag, sizeof(expected_tag));
 		cs_memzero(&tag_ctx, sizeof(tag_ctx));
 		cs_memzero(&header, sizeof(header));
@@ -207,7 +231,7 @@ static int cs_cipher_open_internal(const char *passphrase,
 		unsigned char stream[CS_CRYPTO_SHA256_SIZE];
 		const size_t chunk_size = ((size_t)header.plaintext_size - offset) < CS_CRYPTO_SHA256_SIZE ? ((size_t)header.plaintext_size - offset) : CS_CRYPTO_SHA256_SIZE;
 		const cs_u64 block_index = (cs_u64)(offset / CS_CRYPTO_SHA256_SIZE);
-		cs_cipher_stream_block(key, header.nonce, block_index, stream);
+		cs_cipher_stream_block(enc_key, header.nonce, block_index, stream);
 		for (size_t index = 0U; index < chunk_size; ++index) {
 			plain_bytes[offset + index] = (unsigned char)(cipher_bytes[offset + index] ^ stream[index]);
 		}
@@ -215,7 +239,9 @@ static int cs_cipher_open_internal(const char *passphrase,
 	}
 
 	*out_plaintext_size = (size_t)header.plaintext_size;
-	cs_memzero(key, sizeof(key));
+	cs_memzero(master_key, sizeof(master_key));
+	cs_memzero(enc_key, sizeof(enc_key));
+	cs_memzero(mac_key, sizeof(mac_key));
 	cs_memzero(expected_tag, sizeof(expected_tag));
 	cs_memzero(&tag_ctx, sizeof(tag_ctx));
 	cs_memzero(&header, sizeof(header));
@@ -304,5 +330,29 @@ int cs_cipher_open_alloc(const char *passphrase,
 
 	*out_plaintext = plaintext;
 	return 0;
+}
+
+int cs_cipher_cache_init(void) {
+	if (g_cipher_key_cache_valid) {
+		return 0;
+	}
+	if (cs_key_cache_init(&g_cipher_key_cache, 8U) != 0) {
+		return -1;
+	}
+	g_cipher_key_cache_valid = 1;
+	return 0;
+}
+
+void cs_cipher_cache_clear(void) {
+	if (g_cipher_key_cache_valid) {
+		cs_key_cache_reset(&g_cipher_key_cache);
+	}
+}
+
+void cs_cipher_cache_free(void) {
+	if (g_cipher_key_cache_valid) {
+		cs_key_cache_free(&g_cipher_key_cache);
+		g_cipher_key_cache_valid = 0;
+	}
 }
 

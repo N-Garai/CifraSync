@@ -1,37 +1,34 @@
 # Roadmap
 
 ## Current State
-The core codebase already has a working local backup and restore path, a combined test runner, and utility tools for smoke testing.
+All 7 commands implemented (init, backup, restore, list, verify, prune, sync). Compression (RLE) and encryption (HMAC stream cipher v2 with key separation, CSPRNG, 600K PBKDF2) are wired end-to-end. File-based mutual exclusion locks protect concurrent access. Remote sync server + client work with manifest/chunk transfer. 14 tests pass with zero warnings.
+
+## Completed Milestones
+- All commands functional with interactive TUI and CLI
+- Compression + encryption end-to-end (compress-then-encrypt, decrypt-then-decompress)
+- Encryption hardened: key separation, CSPRNG salt/nonce, 600K PBKDF2 iterations, masked input, key cache
+- Wrong-passphrase detection on restore/verify (no silent garbage)
+- File-based mutual exclusion across all operations
+- Cross-platform: Windows (MinGW), Linux (gcc), macOS (clang)
+- Full test suite: 9 unit + 5 integration tests
+- Comprehensive docs: README, project scope, repo format, wire protocol, security model, test strategy
 
 ## Near-Term Priorities
-1. Tighten repository initialization and list behavior.
-2. Improve documentation for repository and protocol details.
-3. Add richer restore and verify command handling.
-4. Expand remote sync behavior and error reporting.
+1. Switch to a memory-hard KDF (Argon2id) for GPU/ASIC resistance.
+2. Add TLS for remote sync transport.
+3. Improve performance on large directory trees (parallel chunk processing).
 
 ## Mid-Term Priorities
-1. Add stronger platform abstraction for filesystem and networking.
-2. Improve encryption and compression integration.
-3. Add journaling/replay robustness.
-4. Reduce platform-specific assumptions in lower layers.
+1. Add concurrency and pipeline parallelism in backup.
+2. Add non-interactive key-file or env-var passphrase support.
+3. Improve error messages and diagnostics.
 
 ## Long-Term Priorities
-1. Add concurrency and pipeline parallelism.
-2. Improve performance on large trees.
-3. Add better transport security.
-4. Harden against malformed input and partial failures.
-
-## Suggested Implementation Order
-1. Finish command-level behavior.
-2. Improve repository metadata and listing.
-3. Expand restore, verify, and prune paths.
-4. Add sync retries and protocol validation.
-5. Polish logging and diagnostics.
+1. Add cloud storage backend support (S3, Backblaze B2).
+2. Add file-watching daemon mode for continuous backup.
+3. Add GUI or web dashboard.
 
 ## Documentation Maintenance
-- Update docs when repository layout changes.
+- Keep docs aligned with current repository layout and features.
+- Keep security model current with implemented cryptography.
 - Keep test strategy aligned with actual runner files.
-- Keep security notes aligned with the current threat model.
-
-## Success Criteria
-The project is moving in the right direction when `release`, `test`, and manual smoke scenarios continue to work together without the docs drifting away from the code.

@@ -7,7 +7,7 @@
 #include "crypto/kdf.h"
 
 #define CS_CRYPTO_BLOB_MAGIC_SIZE 8U
-#define CS_CRYPTO_BLOB_VERSION 1U
+#define CS_CRYPTO_BLOB_VERSION 2U
 #define CS_CRYPTO_TAG_SIZE CS_CRYPTO_SHA256_SIZE
 
 typedef struct cs_cipher_blob_header {
@@ -46,6 +46,10 @@ int cs_cipher_open_buffer(const char *passphrase,
 	size_t *out_plaintext_size);
 
 size_t cs_cipher_blob_overhead(void);
+
+int cs_cipher_cache_init(void);
+void cs_cipher_cache_clear(void);
+void cs_cipher_cache_free(void);
 
 #endif
 

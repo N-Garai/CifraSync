@@ -2,6 +2,7 @@
 
 #include "common/constants.h"
 #include "common/log.h"
+#include "common/memory.h"
 #include "common/path.h"
 #include "compress/codec.h"
 #include "core/journal.h"
@@ -410,11 +411,15 @@ static int cs_engine_restore_file_internal(cs_chunk_store_t *chunk_store, const 
 			if (passphrase != NULL && passphrase[0] != '\0') {
 				unsigned char *decrypted = NULL;
 				size_t decrypted_size = 0U;
-				if (cs_cipher_open_alloc(passphrase, raw_data, raw_size, &decrypted, &decrypted_size) == 0) {
+				if (cs_cipher_open_alloc(passphrase, raw_data, raw_size, &decrypted, &decrypted_size) != 0) {
 					free(raw_data);
-					raw_data = decrypted;
-					raw_size = decrypted_size;
+					CS_LOG_ERROR("engine: decryption failed for chunk %s (wrong passphrase or corrupt data)", chunk->hash_hex);
+					status = -1;
+					break;
 				}
+				free(raw_data);
+				raw_data = decrypted;
+				raw_size = decrypted_size;
 			}
 
 			{
@@ -720,11 +725,15 @@ static void cs_engine_verify_snapshot(const cs_manifest_t *manifest, const char 
 				if (passphrase != NULL && passphrase[0] != '\0') {
 					unsigned char *decrypted = NULL;
 					size_t decrypted_size = 0U;
-					if (cs_cipher_open_alloc(passphrase, verify_data, verify_size, &decrypted, &decrypted_size) == 0) {
+					if (cs_cipher_open_alloc(passphrase, verify_data, verify_size, &decrypted, &decrypted_size) != 0) {
 						free(verify_data);
-						verify_data = decrypted;
-						verify_size = decrypted_size;
+						printf("  DECRYPT FAILED chunk %s (file: %s) — wrong passphrase or corrupt data\n", chunk->hash_hex, file->path);
+						(*corrupt_chunks)++;
+						continue;
 					}
+					free(verify_data);
+					verify_data = decrypted;
+					verify_size = decrypted_size;
 				}
 
 				{
@@ -1327,9 +1336,51 @@ int cs_engine_init(void) {
 	return 0;
 }
 
+static void cs_engine_read_passphrase(const char *prompt, char *buf, size_t buf_size) {
+	printf("%s", prompt);
+	fflush(stdout);
+#ifdef _WIN32
+	{
+		HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+		DWORD mode = 0;
+		if (hStdin != INVALID_HANDLE_VALUE && GetConsoleMode(hStdin, &mode)) {
+			SetConsoleMode(hStdin, mode & ~(DWORD)ENABLE_ECHO_INPUT);
+			if (fgets(buf, (int)buf_size, stdin) != NULL) {
+				size_t plen = strlen(buf);
+				while (plen > 0U && (buf[plen - 1U] == '\n' || buf[plen - 1U] == '\r')) {
+					buf[--plen] = '\0';
+				}
+			}
+			SetConsoleMode(hStdin, mode);
+		} else {
+			if (fgets(buf, (int)buf_size, stdin) != NULL) {
+				size_t plen = strlen(buf);
+				while (plen > 0U && (buf[plen - 1U] == '\n' || buf[plen - 1U] == '\r')) {
+					buf[--plen] = '\0';
+				}
+			}
+		}
+		printf("\n");
+	}
+#else
+	{
+		char *result = getpass(prompt);
+		if (result != NULL) {
+			strncpy(buf, result, buf_size - 1U);
+			buf[buf_size - 1U] = '\0';
+			size_t plen = strlen(buf);
+			while (plen > 0U && (buf[plen - 1U] == '\n' || buf[plen - 1U] == '\r')) {
+				buf[--plen] = '\0';
+			}
+		}
+	}
+#endif
+}
+
 int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run, int compress, int encrypt, const char *label,
 					 const char *const *include_patterns, size_t include_count,
-					 const char *const *exclude_patterns, size_t exclude_count) {
+					 const char *const *exclude_patterns, size_t exclude_count,
+					 const char *passphrase_override) {
 	cs_manifest_t manifest;
 	cs_repo_t repo;
 	cs_chunk_store_t *chunk_store = NULL;
@@ -1362,14 +1413,14 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 				 (unsigned long)include_count, (unsigned long)exclude_count);
 
 	if (encrypt != 0) {
-		CS_LOG_INFO("engine: encryption enabled, requesting passphrase");
-		printf("Enter encryption passphrase: ");
-		if (fgets(passphrase, sizeof(passphrase), stdin) != NULL) {
-			size_t plen = strlen(passphrase);
-			while (plen > 0U && (passphrase[plen - 1U] == '\n' || passphrase[plen - 1U] == '\r')) {
-				passphrase[--plen] = '\0';
-			}
+		if (passphrase_override != NULL && passphrase_override[0] != '\0') {
+			strncpy(passphrase, passphrase_override, sizeof(passphrase) - 1U);
+			passphrase[sizeof(passphrase) - 1U] = '\0';
+		} else {
+			CS_LOG_INFO("engine: encryption enabled, requesting passphrase");
+			cs_engine_read_passphrase("Enter encryption passphrase: ", passphrase, sizeof(passphrase));
 		}
+		cs_cipher_cache_init();
 	}
 
 	cs_journal_replay(repo_path, NULL, NULL);
@@ -1474,6 +1525,8 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 	status = 0;
 
 cleanup:
+	cs_memzero(passphrase, sizeof(passphrase));
+	cs_cipher_cache_clear();
 	cs_chunk_store_close(chunk_store);
 	cs_index_store_close(index_store);
 	cs_snapshot_store_close(snapshot_store);
@@ -1496,6 +1549,10 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 	}
 
 	CS_LOG_INFO("engine: restoring snapshot=%s to %s (repo=%s)", snapshot_id, out_path, repo_path);
+
+	if (passphrase != NULL && passphrase[0] != '\0') {
+		cs_cipher_cache_init();
+	}
 
 	if (cs_lock_acquire(repo_path, CS_LOCK_SHARED, &restore_lock) != 0) {
 		CS_LOG_ERROR("engine: restore failed to acquire lock on %s", repo_path);
@@ -1545,6 +1602,7 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 	status = 0;
 
 restore_cleanup:
+	cs_cipher_cache_clear();
 	cs_chunk_store_close(chunk_store);
 	cs_manifest_free(&manifest);
 	cs_lock_release(restore_lock);
@@ -1563,6 +1621,10 @@ int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const
 	}
 
 	CS_LOG_INFO("engine: restoring file=%s from snapshot=%s to %s", source_file, snapshot_id, out_path);
+
+	if (passphrase != NULL && passphrase[0] != '\0') {
+		cs_cipher_cache_init();
+	}
 
 	if (cs_lock_acquire(repo_path, CS_LOCK_SHARED, &restore_lock) != 0) {
 		CS_LOG_ERROR("engine: restore_file failed to acquire lock on %s", repo_path);
@@ -1630,6 +1692,7 @@ int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const
 	CS_LOG_ERROR("engine: restore_file: '%s' not found in snapshot", source_file);
 
 restore_file_cleanup:
+	cs_cipher_cache_clear();
 	cs_chunk_store_close(chunk_store);
 	cs_manifest_free(&manifest);
 	cs_lock_release(restore_lock);
@@ -1637,11 +1700,21 @@ restore_file_cleanup:
 }
 
 int cs_engine_verify(const char *repo_path, const char *passphrase) {
+	int status;
+
 	if (repo_path == NULL) {
 		CS_LOG_ERROR("engine: verify requires repo path");
 		return -1;
 	}
-	return cs_engine_do_verify(repo_path, passphrase);
+
+	if (passphrase != NULL && passphrase[0] != '\0') {
+		cs_cipher_cache_init();
+	}
+
+	status = cs_engine_do_verify(repo_path, passphrase);
+
+	cs_cipher_cache_clear();
+	return status;
 }
 
 int cs_engine_prune(const char *repo_path, const char *keep_last, const char *older_than) {

@@ -5,6 +5,16 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <wincrypt.h>
+#pragma comment(lib, "advapi32")
+#else
+#include <unistd.h>
+#include <fcntl.h>
+#endif
+
 static const cs_u32 cs_sha256_k[64] = {
 	0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
 	0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
@@ -218,34 +228,48 @@ int cs_kdf_hmac_sha256(const void *key, size_t key_size, const void *data, size_
 	return 0;
 }
 
-int cs_kdf_generate_salt(unsigned char out_salt[CS_CRYPTO_SALT_SIZE], size_t salt_size) {
-	static unsigned long long counter = 0ULL;
-	unsigned char seed[64];
-	unsigned char digest[CS_CRYPTO_SHA256_SIZE];
-	time_t now = time(NULL);
-	clock_t ticks = clock();
-	void *stack_addr = (void *)&seed;
+int cs_kdf_generate_random(void *out, size_t out_size) {
+	if (out == NULL || out_size == 0U) {
+		return -1;
+	}
+#ifdef _WIN32
+	{
+		HCRYPTPROV provider = 0;
+		if (CryptAcquireContextA(&provider, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) == 0) {
+			return -1;
+		}
+		if (CryptGenRandom(provider, (DWORD)out_size, (BYTE *)out) == 0) {
+			CryptReleaseContext(provider, 0);
+			return -1;
+		}
+		CryptReleaseContext(provider, 0);
+	}
+#else
+	{
+		int fd = open("/dev/urandom", O_RDONLY);
+		if (fd < 0) {
+			return -1;
+		}
+		size_t total = 0U;
+		while (total < out_size) {
+			ssize_t n = read(fd, (unsigned char *)out + total, out_size - total);
+			if (n <= 0) {
+				close(fd);
+				return -1;
+			}
+			total += (size_t)n;
+		}
+		close(fd);
+	}
+#endif
+	return 0;
+}
 
+int cs_kdf_generate_salt(unsigned char out_salt[CS_CRYPTO_SALT_SIZE], size_t salt_size) {
 	if (out_salt == NULL || salt_size != CS_CRYPTO_SALT_SIZE) {
 		return -1;
 	}
-
-	cs_memzero(seed, sizeof(seed));
-	memcpy(seed, &now, sizeof(now) < 8U ? sizeof(now) : 8U);
-	memcpy(seed + 16U, &ticks, sizeof(ticks) < 8U ? sizeof(ticks) : 8U);
-	memcpy(seed + 32U, &counter, sizeof(counter));
-	memcpy(seed + 48U, &stack_addr, sizeof(stack_addr) < 8U ? sizeof(stack_addr) : 8U);
-	++counter;
-
-	if (cs_kdf_sha256(seed, sizeof(seed), digest) != 0) {
-		cs_memzero(seed, sizeof(seed));
-		return -1;
-	}
-
-	memcpy(out_salt, digest, CS_CRYPTO_SALT_SIZE);
-	cs_memzero(seed, sizeof(seed));
-	cs_memzero(digest, sizeof(digest));
-	return 0;
+	return cs_kdf_generate_random(out_salt, salt_size);
 }
 
 int cs_kdf_pbkdf2_sha256(const char *passphrase,
