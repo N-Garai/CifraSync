@@ -51,7 +51,7 @@ int cs_integration_test_backup_restore(void) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("unable to locate snapshot artifact");
 	}
-	if (cs_engine_restore(repo_root, snapshot_stem, restore_root) != 0) {
+	if (cs_engine_restore(repo_root, snapshot_stem, restore_root, "") != 0) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("restore failed");
 	}

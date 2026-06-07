@@ -369,7 +369,7 @@ static int cs_engine_write_restore_file(const char *out_root, const char *relati
 	return cs_file_write_all(destination, data, size);
 }
 
-static int cs_engine_restore_file_internal(cs_chunk_store_t *chunk_store, const cs_manifest_file_t *file, const char *out_root) {
+static int cs_engine_restore_file_internal(cs_chunk_store_t *chunk_store, const cs_manifest_file_t *file, const char *out_root, const char *passphrase) {
 	unsigned char *buffer = NULL;
 	size_t file_size;
 	size_t chunk_index;
@@ -405,6 +405,16 @@ static int cs_engine_restore_file_internal(cs_chunk_store_t *chunk_store, const 
 		{
 			unsigned char *raw_data = chunk_data;
 			size_t raw_size = chunk_size;
+
+			if (passphrase != NULL && passphrase[0] != '\0') {
+				unsigned char *decrypted = NULL;
+				size_t decrypted_size = 0U;
+				if (cs_cipher_open_alloc(passphrase, raw_data, raw_size, &decrypted, &decrypted_size) == 0) {
+					free(raw_data);
+					raw_data = decrypted;
+					raw_size = decrypted_size;
+				}
+			}
 
 			{
 				unsigned char *decompressed = NULL;
@@ -595,10 +605,11 @@ static int cs_engine_orphan_gc(const char *repo_path) {
 
 static void cs_engine_verify_snapshot(const cs_manifest_t *manifest, const char *snapshot_id, cs_chunk_store_t *chunk_store,
 									  unsigned long *total_files, unsigned long *total_chunks,
-									  unsigned long *corrupt_chunks, unsigned long *missing_chunks);
+									  unsigned long *corrupt_chunks, unsigned long *missing_chunks,
+									  const char *passphrase);
 
 #ifdef _WIN32
-static int cs_engine_do_verify_win32(const char *snapshots_dir, cs_chunk_store_t *chunk_store, unsigned long *total_snapshots, unsigned long *total_files, unsigned long *total_chunks, unsigned long *corrupt_chunks, unsigned long *missing_chunks) {
+static int cs_engine_do_verify_win32(const char *snapshots_dir, cs_chunk_store_t *chunk_store, unsigned long *total_snapshots, unsigned long *total_files, unsigned long *total_chunks, unsigned long *corrupt_chunks, unsigned long *missing_chunks, const char *passphrase) {
 	char pattern[CS_PATH_CAP];
 	WIN32_FIND_DATAA find_data;
 
@@ -631,14 +642,14 @@ static int cs_engine_do_verify_win32(const char *snapshots_dir, cs_chunk_store_t
 			}
 		}
 
-		cs_engine_verify_snapshot(&manifest, snapshot_id, chunk_store, total_files, total_chunks, corrupt_chunks, missing_chunks);
+		cs_engine_verify_snapshot(&manifest, snapshot_id, chunk_store, total_files, total_chunks, corrupt_chunks, missing_chunks, passphrase);
 		cs_manifest_free(&manifest);
 	} while (FindNextFileA(handle, &find_data) != 0);
 	FindClose(handle);
 	return 0;
 }
 #else
-static int cs_engine_do_verify_posix(const char *snapshots_dir, cs_chunk_store_t *chunk_store, unsigned long *total_snapshots, unsigned long *total_files, unsigned long *total_chunks, unsigned long *corrupt_chunks, unsigned long *missing_chunks) {
+static int cs_engine_do_verify_posix(const char *snapshots_dir, cs_chunk_store_t *chunk_store, unsigned long *total_snapshots, unsigned long *total_files, unsigned long *total_chunks, unsigned long *corrupt_chunks, unsigned long *missing_chunks, const char *passphrase) {
 	DIR *dir = opendir(snapshots_dir);
 	if (dir == NULL) return 0;
 
@@ -663,7 +674,7 @@ static int cs_engine_do_verify_posix(const char *snapshots_dir, cs_chunk_store_t
 			snapshot_id[len] = '\0';
 		}
 
-		cs_engine_verify_snapshot(&manifest, snapshot_id, chunk_store, total_files, total_chunks, corrupt_chunks, missing_chunks);
+		cs_engine_verify_snapshot(&manifest, snapshot_id, chunk_store, total_files, total_chunks, corrupt_chunks, missing_chunks, passphrase);
 		cs_manifest_free(&manifest);
 	}
 	closedir(dir);
@@ -673,7 +684,8 @@ static int cs_engine_do_verify_posix(const char *snapshots_dir, cs_chunk_store_t
 
 static void cs_engine_verify_snapshot(const cs_manifest_t *manifest, const char *snapshot_id, cs_chunk_store_t *chunk_store,
 									  unsigned long *total_files, unsigned long *total_chunks,
-									  unsigned long *corrupt_chunks, unsigned long *missing_chunks) {
+									  unsigned long *corrupt_chunks, unsigned long *missing_chunks,
+									  const char *passphrase) {
 	printf("Verifying snapshot %s (%lu files, %llu bytes)...\n", snapshot_id, (unsigned long)manifest->file_count, manifest->total_bytes);
 
 	for (size_t fi = 0U; fi < manifest->file_count; ++fi) {
@@ -704,10 +716,20 @@ static void cs_engine_verify_snapshot(const cs_manifest_t *manifest, const char 
 				unsigned char *verify_data = chunk_data;
 				size_t verify_size = chunk_size;
 
+				if (passphrase != NULL && passphrase[0] != '\0') {
+					unsigned char *decrypted = NULL;
+					size_t decrypted_size = 0U;
+					if (cs_cipher_open_alloc(passphrase, verify_data, verify_size, &decrypted, &decrypted_size) == 0) {
+						free(verify_data);
+						verify_data = decrypted;
+						verify_size = decrypted_size;
+					}
+				}
+
 				{
 					unsigned char *decompressed = NULL;
 					size_t decompressed_size = 0U;
-					if (cs_codec_decompress_alloc(CS_CODEC_RLE, chunk_data, chunk_size, &decompressed, &decompressed_size) == 0) {
+					if (cs_codec_decompress_alloc(CS_CODEC_RLE, verify_data, verify_size, &decompressed, &decompressed_size) == 0) {
 						if (decompressed_size == chunk->size) {
 							free(verify_data);
 							verify_data = decompressed;
@@ -736,7 +758,7 @@ static void cs_engine_verify_snapshot(const cs_manifest_t *manifest, const char 
 	}
 }
 
-static int cs_engine_do_verify(const char *repo_path) {
+static int cs_engine_do_verify(const char *repo_path, const char *passphrase) {
 	char snapshots_dir[CS_PATH_CAP];
 	cs_chunk_store_t *chunk_store = NULL;
 	unsigned long total_snapshots = 0UL;
@@ -758,9 +780,9 @@ static int cs_engine_do_verify(const char *repo_path) {
 	}
 
 #ifdef _WIN32
-	cs_engine_do_verify_win32(snapshots_dir, chunk_store, &total_snapshots, &total_files, &total_chunks, &corrupt_chunks, &missing_chunks);
+	cs_engine_do_verify_win32(snapshots_dir, chunk_store, &total_snapshots, &total_files, &total_chunks, &corrupt_chunks, &missing_chunks, passphrase);
 #else
-	cs_engine_do_verify_posix(snapshots_dir, chunk_store, &total_snapshots, &total_files, &total_chunks, &corrupt_chunks, &missing_chunks);
+	cs_engine_do_verify_posix(snapshots_dir, chunk_store, &total_snapshots, &total_files, &total_chunks, &corrupt_chunks, &missing_chunks, passphrase);
 #endif
 
 	cs_chunk_store_close(chunk_store);
@@ -1449,7 +1471,7 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 	return 0;
 }
 
-int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char *out_path) {
+int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char *out_path, const char *passphrase) {
 	cs_manifest_t manifest;
 	cs_chunk_store_t *chunk_store = NULL;
 	char restore_journal[CS_PATH_CAP * 2U];
@@ -1489,7 +1511,7 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 	}
 
 	for (file_index = 0U; file_index < manifest.file_count; ++file_index) {
-		if (cs_engine_restore_file_internal(chunk_store, &manifest.files[file_index], out_path) != 0) {
+		if (cs_engine_restore_file_internal(chunk_store, &manifest.files[file_index], out_path, passphrase) != 0) {
 			cs_chunk_store_close(chunk_store);
 			cs_manifest_free(&manifest);
 			return -1;
@@ -1509,7 +1531,7 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 	return status;
 }
 
-int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const char *source_file, const char *out_path) {
+int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const char *source_file, const char *out_path, const char *passphrase) {
 	cs_manifest_t manifest;
 	cs_chunk_store_t *chunk_store = NULL;
 
@@ -1572,7 +1594,7 @@ int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const
 				return -1;
 			}
 
-			if (cs_engine_restore_file_internal(chunk_store, file, out_path) != 0) {
+			if (cs_engine_restore_file_internal(chunk_store, file, out_path, passphrase) != 0) {
 				cs_chunk_store_close(chunk_store);
 				cs_manifest_free(&manifest);
 				return -1;
@@ -1591,12 +1613,12 @@ int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const
 	return -1;
 }
 
-int cs_engine_verify(const char *repo_path) {
+int cs_engine_verify(const char *repo_path, const char *passphrase) {
 	if (repo_path == NULL) {
 		CS_LOG_ERROR("engine: verify requires repo path");
 		return -1;
 	}
-	return cs_engine_do_verify(repo_path);
+	return cs_engine_do_verify(repo_path, passphrase);
 }
 
 int cs_engine_prune(const char *repo_path, const char *keep_last, const char *older_than) {

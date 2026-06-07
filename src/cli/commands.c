@@ -32,21 +32,42 @@ static void print_banner(void) {
 void cs_print_help(void) {
 	print_banner();
 	puts("");
+	puts("CifraSync is a zero-dependency encrypted incremental backup tool.");
+	puts("It backs up ANY file type -- text, images, videos, binaries, executables --");
+	puts("by reading raw bytes in binary mode, splitting into SHA-256 chunks,");
+	puts("and optionally compressing (RLE) and encrypting (HMAC stream cipher).");
+	puts("Deduplication ensures identical data across files/snapshots is stored once.");
+	puts("");
 	puts("Usage:");
 	puts("  cifrasync <command> [options]");
 	puts("");
+	puts("Quick start:");
+	puts("  cifrasync init --repo C:\\my_repo");
+	puts("  cifrasync backup --source C:\\my_files --repo C:\\my_repo --compress");
+	puts("  cifrasync list --repo C:\\my_repo");
+	puts("  cifrasync restore --repo C:\\my_repo --snapshot <ID> --out C:\\restored");
+	puts("");
 	puts("Commands:");
-	puts("  init       Initialize a repository");
-	puts("  backup     Create an incremental backup");
-	puts("  list       List snapshots");
-	puts("  restore    Restore from a snapshot");
-	puts("  verify     Verify stored data integrity");
-	puts("  prune      Remove old snapshots");
-	puts("  sync       Synchronize with remote repository");
-	puts("  serve      Start server for incoming sync connections");
+	puts("  init       Create a repository with directory structure");
+	puts("             (chunks/, snapshots/, index/, journal/, locks/)");
+	puts("  backup     Scan source dir, chunk files (SHA-256, 1 MiB),");
+	puts("             deduplicate, optionally compress & encrypt,");
+	puts("             append snapshot. Works on any file type.");
+	puts("  list       Show all snapshots with ID, timestamp, file count,");
+	puts("             human-readable size, and label.");
+	puts("  restore    Restore full snapshot or single file (--source-file).");
+	puts("             Decompresses and decrypts automatically.");
+	puts("  verify     Re-read every chunk, recompute SHA-256 hash,");
+	puts("             report missing or corrupt chunks.");
+	puts("  prune      Delete old snapshots (--keep-last N, --older-than DAYS)");
+	puts("             and garbage-collect orphan chunks.");
+	puts("  sync       Push snapshots + missing chunk data to a remote");
+	puts("             CifraSync server. Only new chunks are transferred.");
+	puts("  serve      Start TCP server to receive sync data from clients.");
+	puts("             With --repo PATH, stores received data into repo.");
 	puts("");
 	puts("Global options:");
-	puts("  -h, --help       Show help");
+	puts("  -h, --help       Show this help");
 	puts("  -V, --version    Show version");
 	puts("");
 	puts("Command options:");
@@ -59,6 +80,21 @@ void cs_print_help(void) {
 	puts("  prune    --repo PATH [--keep-last N] [--older-than DAYS]");
 	puts("  sync     --repo PATH --remote HOST:PORT");
 	puts("  serve    --bind HOST:PORT [--repo PATH]");
+	puts("");
+	puts("Interactive mode:");
+	puts("  Run cifrasync with no arguments to launch the TUI.");
+	puts("  Choose a number (1-9) to run commands interactively.");
+	puts("");
+	puts("Key features:");
+	puts("  * Any file type (binary mode, no text restrictions)");
+	puts("  * SHA-256 chunk-level deduplication (1 MiB fixed chunks)");
+	puts("  * RLE compression + HMAC stream cipher per chunk");
+	puts("  * Atomic manifest writes (.tmp + rename) for crash safety");
+	puts("  * Journal replay auto-resumes interrupted backups");
+	puts("  * Cross-platform: Windows (MinGW), Linux, macOS");
+	puts("  * Single binary, zero dependencies, ~200 KB");
+	puts("");
+	puts("Docs: see docs/ directory for full specification.");
 }
 
 const char *cs_version(void) {
@@ -134,18 +170,29 @@ static int handle_backup(const cs_cli_options_t *options) {
 }
 
 static int handle_restore(const cs_cli_options_t *options) {
+	char passphrase[256] = "";
+
 	if (is_required_missing(options->repo) || is_required_missing(options->snapshot) || is_required_missing(options->output)) {
 		fprintf(stderr, "restore requires --repo PATH --snapshot ID --out PATH\n");
 		return CS_ERR_USAGE;
 	}
+
+	printf("Enter decryption passphrase (leave blank if not encrypted): ");
+	if (fgets(passphrase, sizeof(passphrase), stdin) != NULL) {
+		size_t plen = strlen(passphrase);
+		while (plen > 0U && (passphrase[plen - 1U] == '\n' || passphrase[plen - 1U] == '\r')) {
+			passphrase[--plen] = '\0';
+		}
+	}
+
 	if (options->source_file != NULL && options->source_file[0] != '\0') {
-		if (cs_engine_restore_file(options->repo, options->snapshot, options->source_file, options->output) != 0) {
+		if (cs_engine_restore_file(options->repo, options->snapshot, options->source_file, options->output, passphrase) != 0) {
 			fprintf(stderr, "restore single file failed\n");
 			return CS_ERR_INVALID;
 		}
 		printf("Single file restore complete.\n");
 	} else {
-		if (cs_engine_restore(options->repo, options->snapshot, options->output) != 0) {
+		if (cs_engine_restore(options->repo, options->snapshot, options->output, passphrase) != 0) {
 			fprintf(stderr, "restore failed\n");
 			return CS_ERR_INVALID;
 		}
@@ -155,11 +202,22 @@ static int handle_restore(const cs_cli_options_t *options) {
 }
 
 static int handle_verify(const cs_cli_options_t *options) {
+	char passphrase[256] = "";
+
 	if (is_required_missing(options->repo)) {
 		fprintf(stderr, "verify requires --repo PATH\n");
 		return CS_ERR_USAGE;
 	}
-	if (cs_engine_verify(options->repo) != 0) {
+
+	printf("Enter decryption passphrase (leave blank if not encrypted): ");
+	if (fgets(passphrase, sizeof(passphrase), stdin) != NULL) {
+		size_t plen = strlen(passphrase);
+		while (plen > 0U && (passphrase[plen - 1U] == '\n' || passphrase[plen - 1U] == '\r')) {
+			passphrase[--plen] = '\0';
+		}
+	}
+
+	if (cs_engine_verify(options->repo, passphrase) != 0) {
 		fprintf(stderr, "verify: data integrity check failed\n");
 		return CS_ERR_INVALID;
 	}

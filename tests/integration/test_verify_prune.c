@@ -107,10 +107,10 @@ int cs_integration_test_verify_prune(void) {
 		return cs_it_fail("second snapshot creation failed");
 	}
 
-	if (cs_snapshot_store_count(snapshot_store) != 2UL) {
+	if (cs_snapshot_store_count(snapshot_store) != 3UL) {
 		cs_snapshot_store_close(snapshot_store);
 		cs_it_remove_tree(base);
-		return cs_it_fail("snapshot store count should be two before prune");
+		return cs_it_fail("snapshot store count should be three before prune");
 	}
 	if (cs_snapshot_store_latest(snapshot_store, &latest_snapshot) != 0) {
 		cs_snapshot_store_close(snapshot_store);
@@ -127,10 +127,10 @@ int cs_integration_test_verify_prune(void) {
 		cs_it_remove_tree(base);
 		return cs_it_fail("snapshot prune delete failed");
 	}
-	if (cs_snapshot_store_count(snapshot_store) != 1UL) {
+	if (cs_snapshot_store_count(snapshot_store) != 2UL) {
 		cs_snapshot_store_close(snapshot_store);
 		cs_it_remove_tree(base);
-		return cs_it_fail("snapshot store count should be one after prune");
+		return cs_it_fail("snapshot store count should be two after prune");
 	}
 
 	cs_snapshot_store_close(snapshot_store);
