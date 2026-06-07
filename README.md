@@ -19,7 +19,7 @@ CifraSync fills the gap: a **single small binary**, zero dependencies, with chun
 |---|---|
 | **Pure C, zero dependencies** | Single statically-linked binary; no Python, no Go runtime, no npm. Builds in <5 seconds. |
 | **Chunk-level deduplication** | Fixed-size 1 MiB SHA-256 chunks; identical files or repeated data across snapshots stored only once. |
-| **RLE compression + HMAC cipher** | Per-chunk compress-then-encrypt pipeline. RLE is fast and simple; HMAC-based stream cipher provides authenticated encryption. |
+| **RLE compression + HMAC cipher (v2)** | Per-chunk compress-then-encrypt pipeline. Blob v2 with key separation (enc_key/mac_key derived via HMAC), cryptographically random salt+nonce, 600K PBKDF2 iterations, and constant-time tag verification. |
 | **Atomic manifest writes** | `.tmp` + `rename()` — snapshots are never left in a half-written state, even on power loss. |
 | **Journal replay** | Operation journal is replayed on startup; interrupted backups auto-resume without corruption. |
 | **Cross-platform by design** | Single codebase compiles on Windows (MinGW), Linux (gcc), and macOS (clang) with `#ifdef` for platform differences. |
@@ -99,13 +99,13 @@ When `cifrasync` is run with no arguments, it launches a colored interactive TUI
 | | | | **Include file** — file with glob patterns to include | `C:\include.txt` (blank = all) |
 | | | | **Exclude file** — file with glob patterns to skip | `C:\exclude.txt` (blank = none) |
 | | | | **Compress** — `y`/`n` to RLE-compress chunks | `y` |
-| | | | **Encrypt** — `y`/`n` to encrypt with passphrase | `n` |
+| | | | **Encrypt** — `y`/`n` to encrypt with passphrase (masked input, no echo) | `n` |
 | | | | **Dry run** — `y`/`n` to scan without storing | `n` |
 | 3 | `list` | List all snapshots | None | — |
 | 4 | `restore` | Restore files from snapshot | **Snapshot ID** — ID from `list` output | `2026-06-04T15-28-06Z` |
 | | | | **Output path** — where to write restored files | `C:\restored` |
 | | | | **Single file** — restore only one path | `.gitignore` (blank = all) |
-| 5 | `verify` | Check chunk integrity | None | — |
+| 5 | `verify` | Check chunk integrity (passphrase for encrypted repos) | None (passphrase prompted if repo encrypted) | — |
 | 6 | `prune` | Remove old snapshots + orphan chunks | **Keep last N** — keep N newest snapshots | `7` |
 | | | | **Older than N days** — delete snapshots older than N days | `30` (blank = off) |
 | 7 | `sync` | Sync with remote server (full manifest + chunk transfer) | **Remote host:port** — server address | `192.168.1.100:9000` |
@@ -139,7 +139,7 @@ cifrasync serve --bind HOST:PORT [--repo PATH]
 |---|---|---|
 | Chunk-based deduplication | Done | SHA-256, 1 MiB fixed-size chunks |
 | RLE compression | Done | Per-chunk, auto-decompressed on restore/verify |
-| Stream cipher encryption | Done | HMAC-based, passphrase prompted at backup time |
+| Stream cipher encryption (v2) | Done | HMAC-based, key separation (enc_key/mac_key), CSPRNG salt+nonce, 600K PBKDF2 iterations, masked passphrase input |
 | Incremental snapshots | Done | Only new/changed files stored each run |
 | Snapshot list with details | Done | ID, timestamp, file count, human size, label |
 | Single-file restore | Done | `--source-file PATH` |
@@ -155,6 +155,7 @@ cifrasync serve --bind HOST:PORT [--repo PATH]
 | Interactive TUI | Done | Colored numbered menu |
 | "wake up cifra" | Done | One-command launcher + PATH setup |
 | Cross-platform | Done | Windows MinGW / Linux gcc / macOS clang |
+| File-based mutual exclusion | Done | EXCLUSIVE (backup/prune/sync-server) / SHARED (restore/verify/sync-client) locks via flock / LockFileEx |
 
 ---
 
@@ -175,7 +176,8 @@ src/
 │   ├── repo.c          — Repository init/layout
 │   ├── chunk_store.c   — Chunk read/write
 │   ├── index_store.c   — Hash index
-│   └── snapshot_store.c— Snapshot metadata
+│   ├── snapshot_store.c— Snapshot metadata
+│   └── lock.c          — File-based mutual exclusion
 ├── delta/
 │   ├── hash.c          — SHA-256 wrapper
 │   ├── chunker.c       — File-to-chunk splitting
@@ -225,7 +227,7 @@ src/
 mingw32-make release    # optimized (-O2)
 mingw32-make debug      # debug (-O0 -g3)
 mingw32-make asan       # AddressSanitizer + UBSan
-mingw32-make test       # build + run all tests (13 tests)
+mingw32-make test       # build + run all tests (14 tests)
 mingw32-make run        # build release + launch interactive
 mingw32-make tools      # utility programs (wake, benchmark_hash, etc.)
 mingw32-make clean      # remove build/ and bin/
@@ -239,7 +241,7 @@ mingw32-make clean      # remove build/ and bin/
 
 | Platform | Status | Notes |
 |---|---|---|
-| Windows (MinGW-w64) | **Fully tested** | All 13 tests pass; primary target |
+| Windows (MinGW-w64) | **Fully tested** | All 14 tests pass; primary target |
 | Linux (gcc) | **Builds clean** | POSIX fallbacks for walk/GC/verify/list; not CI-tested |
 | macOS (clang) | **Should build** | Shares Linux code path; not tested |
 
@@ -247,10 +249,10 @@ mingw32-make clean      # remove build/ and bin/
 
 ## Testing
 
-13 tests total (9 unit + 4 integration):
+14 tests total (9 unit + 5 integration):
 
 - **Unit**: parser, hash, chunker, codec, cipher, repo, index_store, snapshot_store, scanner
-- **Integration**: backup+restore round-trip, incremental resume, remote sync, verify+prune
+- **Integration**: backup+restore round-trip, encrypted backup+restore, incremental resume, remote sync, verify+prune
 
 ```bash
 mingw32-make test
