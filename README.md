@@ -214,7 +214,7 @@ src/
 ├── snapshots/     — Snapshot manifest files (.snapshot)
 ├── index/         — Hash → chunk mapping index
 ├── journal/       — Operation journal for crash recovery
-└── locks/         — Lock files (not yet used)
+└── locks/         — File-based mutual exclusion locks
 ```
 
 ---

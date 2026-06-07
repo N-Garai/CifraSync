@@ -4,6 +4,7 @@
 #include "common/memory.h"
 #include "common/path.h"
 #include "storage/chunk_store.h"
+#include "storage/lock.h"
 #include "storage/snapshot_store.h"
 
 #include <stdio.h>
@@ -196,11 +197,17 @@ int cs_net_server_default_handler(const cs_net_frame_t *request, cs_net_owned_fr
 static cs_chunk_store_t *cs_sync_chunk_store = NULL;
 static cs_snapshot_store_t *cs_sync_snapshot_store = NULL;
 static char cs_sync_repo_path[CS_PATH_CAP] = "";
+static cs_lock_t *cs_sync_lock = NULL;
 
 static int cs_sync_open_stores(const char *repo_path) {
 	if (repo_path == NULL || repo_path[0] == '\0') {
 		return -1;
 	}
+
+	if (cs_lock_acquire(repo_path, CS_LOCK_EXCLUSIVE, &cs_sync_lock) != 0) {
+		return -1;
+	}
+
 	strncpy(cs_sync_repo_path, repo_path, sizeof(cs_sync_repo_path) - 1U);
 	cs_sync_repo_path[sizeof(cs_sync_repo_path) - 1U] = '\0';
 
@@ -211,6 +218,8 @@ static int cs_sync_open_stores(const char *repo_path) {
 		cs_snapshot_store_close(cs_sync_snapshot_store);
 		cs_sync_chunk_store = NULL;
 		cs_sync_snapshot_store = NULL;
+		cs_lock_release(cs_sync_lock);
+		cs_sync_lock = NULL;
 		return -1;
 	}
 	return 0;
@@ -222,6 +231,8 @@ static void cs_sync_close_stores(void) {
 	cs_sync_chunk_store = NULL;
 	cs_sync_snapshot_store = NULL;
 	cs_sync_repo_path[0] = '\0';
+	cs_lock_release(cs_sync_lock);
+	cs_sync_lock = NULL;
 }
 
 static int cs_sync_store_manifest(const char *snapshot_id, const char *manifest_content, size_t content_len) {

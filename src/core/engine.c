@@ -16,6 +16,7 @@
 #include "net/protocol.h"
 #include "storage/chunk_store.h"
 #include "storage/index_store.h"
+#include "storage/lock.h"
 #include "storage/repo.h"
 #include "storage/snapshot_store.h"
 #include "util/config.h"
@@ -766,16 +767,24 @@ static int cs_engine_do_verify(const char *repo_path, const char *passphrase) {
 	unsigned long total_chunks = 0UL;
 	unsigned long corrupt_chunks = 0UL;
 	unsigned long missing_chunks = 0UL;
+	cs_lock_t *verify_lock = NULL;
 
 	CS_LOG_INFO("engine: verify starting repo=%s", repo_path);
 
+	if (cs_lock_acquire(repo_path, CS_LOCK_SHARED, &verify_lock) != 0) {
+		CS_LOG_ERROR("engine: verify failed to acquire lock on %s", repo_path);
+		return -1;
+	}
+
 	if (cs_engine_join(snapshots_dir, sizeof(snapshots_dir), repo_path, "snapshots") != 0) {
+		cs_lock_release(verify_lock);
 		return -1;
 	}
 
 	chunk_store = cs_chunk_store_open(repo_path);
 	if (chunk_store == NULL) {
 		CS_LOG_ERROR("engine: verify failed to open chunk store");
+		cs_lock_release(verify_lock);
 		return -1;
 	}
 
@@ -796,10 +805,12 @@ static int cs_engine_do_verify(const char *repo_path, const char *passphrase) {
 
 	if (missing_chunks > 0UL || corrupt_chunks > 0UL) {
 		CS_LOG_ERROR("engine: verify found %lu missing, %lu corrupt chunks", missing_chunks, corrupt_chunks);
+		cs_lock_release(verify_lock);
 		return -1;
 	}
 
 	CS_LOG_INFO("engine: verify complete - all chunks OK");
+	cs_lock_release(verify_lock);
 	return 0;
 }
 
@@ -807,13 +818,20 @@ static int cs_engine_do_prune(const char *repo_path, const char *keep_last_str, 
 	cs_snapshot_store_t *store = NULL;
 	size_t keep_count = 0U;
 	time_t older_than_time = 0;
-	int status = 0;
+	int status = -1;
+	cs_lock_t *prune_lock = NULL;
 
 	CS_LOG_INFO("engine: prune starting repo=%s", repo_path);
+
+	if (cs_lock_acquire(repo_path, CS_LOCK_EXCLUSIVE, &prune_lock) != 0) {
+		CS_LOG_ERROR("engine: prune failed to acquire lock on %s", repo_path);
+		return -1;
+	}
 
 	store = cs_snapshot_store_open(repo_path);
 	if (store == NULL) {
 		CS_LOG_ERROR("engine: prune failed to open snapshot store");
+		cs_lock_release(prune_lock);
 		return -1;
 	}
 
@@ -837,8 +855,7 @@ static int cs_engine_do_prune(const char *repo_path, const char *keep_last_str, 
 		size_t deleted_count = 0U;
 
 		if (cs_snapshot_store_list(store, &snapshots, &snapshot_count) != 0) {
-			cs_snapshot_store_close(store);
-			return -1;
+			goto prune_cleanup;
 		}
 
 		if (snapshot_count > keep_count) {
@@ -882,7 +899,11 @@ static int cs_engine_do_prune(const char *repo_path, const char *keep_last_str, 
 
 	cs_engine_orphan_gc(repo_path);
 
+	status = 0;
+
+prune_cleanup:
 	cs_snapshot_store_close(store);
+	cs_lock_release(prune_lock);
 	return status;
 }
 
@@ -932,6 +953,7 @@ static int cs_engine_do_sync(const char *repo_path, const char *remote) {
 	size_t snapshot_count = 0U;
 	int status = -1;
 	int sync_ok = 0;
+	cs_lock_t *sync_lock = NULL;
 
 	CS_LOG_INFO("engine: sync starting repo=%s remote=%s", repo_path, remote);
 
@@ -975,7 +997,12 @@ static int cs_engine_do_sync(const char *repo_path, const char *remote) {
 	printf("HELLO response: %.*s\n", (int)reply.frame.payload_size, (const char *)reply.frame.payload);
 	cs_net_owned_frame_reset(&reply);
 
-	/* Open local repo */
+	/* Lock and open local repo */
+	if (cs_lock_acquire(repo_path, CS_LOCK_SHARED, &sync_lock) != 0) {
+		CS_LOG_ERROR("engine: sync failed to acquire lock on %s", repo_path);
+		goto cleanup;
+	}
+
 	store = cs_snapshot_store_open(repo_path);
 	if (store == NULL) {
 		CS_LOG_ERROR("engine: sync failed to open snapshot store");
@@ -1178,6 +1205,7 @@ cleanup:
 	cs_chunk_store_close(chunk_store);
 	cs_snapshot_store_close(store);
 	cs_net_client_close(&client);
+	cs_lock_release(sync_lock);
 
 	if (sync_ok) {
 		CS_LOG_INFO("engine: sync complete to %s:%u", host, (unsigned)port);
@@ -1314,10 +1342,18 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 	char journal_record[CS_PATH_CAP * 2U];
 	char passphrase[256] = "";
 	int status;
+	cs_lock_t *backup_lock = NULL;
 
 	if (source_path == NULL || repo_path == NULL) {
 		CS_LOG_ERROR("engine: backup requires source and repo");
 		return -1;
+	}
+
+	if (!dry_run) {
+		if (cs_lock_acquire(repo_path, CS_LOCK_EXCLUSIVE, &backup_lock) != 0) {
+			CS_LOG_ERROR("engine: backup failed to acquire lock on %s", repo_path);
+			return -1;
+		}
 	}
 
 	CS_LOG_INFO("engine: starting backup source=%s repo=%s dry_run=%d compress=%d encrypt=%d label=%s "
@@ -1338,8 +1374,10 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 
 	cs_journal_replay(repo_path, NULL, NULL);
 
+	status = -1;
+
 	if (cs_manifest_init(&manifest) != 0) {
-		return -1;
+		goto cleanup;
 	}
 
 	backup_ctx.source_root = source_path;
@@ -1355,14 +1393,12 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 	backup_ctx.total_chunks = 0ULL;
 
 	if (cs_chunker_init(&backup_ctx.chunker, CS_DELTA_DEFAULT_CHUNK_SIZE) != 0) {
-		cs_manifest_free(&manifest);
-		return -1;
+		goto cleanup;
 	}
 
 	if (!backup_ctx.dry_run) {
 		if (cs_engine_prepare_repo(repo_path, &repo) != 0) {
-			cs_manifest_free(&manifest);
-			return -1;
+			goto cleanup;
 		}
 
 		chunk_store = cs_chunk_store_open(repo_path);
@@ -1372,8 +1408,7 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 			cs_chunk_store_close(chunk_store);
 			cs_index_store_close(index_store);
 			cs_snapshot_store_close(snapshot_store);
-			cs_manifest_free(&manifest);
-			return -1;
+			goto cleanup;
 		}
 
 		backup_ctx.chunk_store = chunk_store;
@@ -1388,71 +1423,43 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 
 	status = cs_fs_scan(source_path, &scan_opts, cs_engine_scan_visit, &backup_ctx);
 	if (status != 0) {
-		cs_chunk_store_close(chunk_store);
-		cs_index_store_close(index_store);
-		cs_snapshot_store_close(snapshot_store);
-		cs_manifest_free(&manifest);
-		return -1;
+		goto cleanup;
 	}
 
 	if (backup_ctx.dry_run) {
 		CS_LOG_INFO("engine: dry run complete files=%lu chunks=%lu bytes=%lu",
 					(unsigned long)backup_ctx.file_count, (unsigned long)backup_ctx.total_chunks, (unsigned long)backup_ctx.total_bytes);
-		cs_manifest_free(&manifest);
-		return 0;
+		status = 0;
+		goto cleanup;
 	}
 
 	if (cs_snapshot_store_create(snapshot_store, source_path, label, &snapshot) != 0) {
-		cs_chunk_store_close(chunk_store);
-		cs_index_store_close(index_store);
-		cs_snapshot_store_close(snapshot_store);
-		cs_manifest_free(&manifest);
-		return -1;
+		goto cleanup;
 	}
 
 	snapshot.file_count = (unsigned long)manifest.file_count;
 	snapshot.size_bytes = manifest.total_bytes;
 	if (cs_snapshot_store_update(snapshot_store, &snapshot) != 0) {
-		cs_chunk_store_close(chunk_store);
-		cs_index_store_close(index_store);
-		cs_snapshot_store_close(snapshot_store);
-		cs_manifest_free(&manifest);
-		return -1;
+		goto cleanup;
 	}
 
 	if (cs_engine_snapshot_artifact_path(repo_path, snapshot.id, ".manifest", manifest_path, sizeof(manifest_path)) != 0) {
-		cs_chunk_store_close(chunk_store);
-		cs_index_store_close(index_store);
-		cs_snapshot_store_close(snapshot_store);
-		cs_manifest_free(&manifest);
-		return -1;
+		goto cleanup;
 	}
 
 	{
 		char tmp_manifest_path[CS_PATH_CAP];
 		int written = snprintf(tmp_manifest_path, sizeof(tmp_manifest_path), "%s.tmp", manifest_path);
 		if (written < 0 || (size_t)written >= sizeof(tmp_manifest_path)) {
-			cs_chunk_store_close(chunk_store);
-			cs_index_store_close(index_store);
-			cs_snapshot_store_close(snapshot_store);
-			cs_manifest_free(&manifest);
-			return -1;
+			goto cleanup;
 		}
 		if (cs_manifest_write(&manifest, tmp_manifest_path) != 0) {
-			cs_chunk_store_close(chunk_store);
-			cs_index_store_close(index_store);
-			cs_snapshot_store_close(snapshot_store);
-			cs_manifest_free(&manifest);
 			remove(tmp_manifest_path);
-			return -1;
+			goto cleanup;
 		}
 		if (rename(tmp_manifest_path, manifest_path) != 0) {
-			cs_chunk_store_close(chunk_store);
-			cs_index_store_close(index_store);
-			cs_snapshot_store_close(snapshot_store);
-			cs_manifest_free(&manifest);
 			remove(tmp_manifest_path);
-			return -1;
+			goto cleanup;
 		}
 	}
 
@@ -1464,11 +1471,15 @@ int cs_engine_backup(const char *source_path, const char *repo_path, int dry_run
 	CS_LOG_INFO("engine: backup complete snapshot=%s files=%lu chunks=%lu bytes=%lu",
 				 snapshot.id, (unsigned long)manifest.file_count, (unsigned long)manifest.total_chunks, (unsigned long)manifest.total_bytes);
 
+	status = 0;
+
+cleanup:
 	cs_chunk_store_close(chunk_store);
 	cs_index_store_close(index_store);
 	cs_snapshot_store_close(snapshot_store);
 	cs_manifest_free(&manifest);
-	return 0;
+	cs_lock_release(backup_lock);
+	return status;
 }
 
 int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char *out_path, const char *passphrase) {
@@ -1477,6 +1488,7 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 	char restore_journal[CS_PATH_CAP * 2U];
 	size_t file_index;
 	int status;
+	cs_lock_t *restore_lock = NULL;
 
 	if (repo_path == NULL || snapshot_id == NULL || out_path == NULL) {
 		CS_LOG_ERROR("engine: restore requires repo, snapshot and out path");
@@ -1485,36 +1497,42 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 
 	CS_LOG_INFO("engine: restoring snapshot=%s to %s (repo=%s)", snapshot_id, out_path, repo_path);
 
+	if (cs_lock_acquire(repo_path, CS_LOCK_SHARED, &restore_lock) != 0) {
+		CS_LOG_ERROR("engine: restore failed to acquire lock on %s", repo_path);
+		return -1;
+	}
+
 	if (cs_repo_validate(repo_path) != 0) {
 		CS_LOG_ERROR("engine: invalid repository %s", repo_path);
+		cs_lock_release(restore_lock);
 		return -1;
 	}
 
 	if (cs_engine_mkdir_p(out_path) != 0) {
 		CS_LOG_ERROR("engine: failed to create output directory %s", out_path);
+		cs_lock_release(restore_lock);
 		return -1;
 	}
 
 	if (cs_manifest_init(&manifest) != 0) {
+		cs_lock_release(restore_lock);
 		return -1;
 	}
 
+	status = -1;
+
 	if (cs_engine_restore_manifest(repo_path, snapshot_id, &manifest) != 0) {
-		cs_manifest_free(&manifest);
-		return -1;
+		goto restore_cleanup;
 	}
 
 	chunk_store = cs_chunk_store_open(repo_path);
 	if (chunk_store == NULL) {
-		cs_manifest_free(&manifest);
-		return -1;
+		goto restore_cleanup;
 	}
 
 	for (file_index = 0U; file_index < manifest.file_count; ++file_index) {
 		if (cs_engine_restore_file_internal(chunk_store, &manifest.files[file_index], out_path, passphrase) != 0) {
-			cs_chunk_store_close(chunk_store);
-			cs_manifest_free(&manifest);
-			return -1;
+			goto restore_cleanup;
 		}
 	}
 
@@ -1526,14 +1544,18 @@ int cs_engine_restore(const char *repo_path, const char *snapshot_id, const char
 	CS_LOG_INFO("engine: restore complete snapshot=%s files=%lu", snapshot_id, (unsigned long)manifest.file_count);
 	status = 0;
 
+restore_cleanup:
 	cs_chunk_store_close(chunk_store);
 	cs_manifest_free(&manifest);
+	cs_lock_release(restore_lock);
 	return status;
 }
 
 int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const char *source_file, const char *out_path, const char *passphrase) {
 	cs_manifest_t manifest;
 	cs_chunk_store_t *chunk_store = NULL;
+	cs_lock_t *restore_lock = NULL;
+	int status = -1;
 
 	if (repo_path == NULL || snapshot_id == NULL || source_file == NULL || out_path == NULL) {
 		CS_LOG_ERROR("engine: restore_file requires repo, snapshot, source, out");
@@ -1542,25 +1564,32 @@ int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const
 
 	CS_LOG_INFO("engine: restoring file=%s from snapshot=%s to %s", source_file, snapshot_id, out_path);
 
+	if (cs_lock_acquire(repo_path, CS_LOCK_SHARED, &restore_lock) != 0) {
+		CS_LOG_ERROR("engine: restore_file failed to acquire lock on %s", repo_path);
+		return -1;
+	}
+
 	if (cs_repo_validate(repo_path) != 0) {
 		CS_LOG_ERROR("engine: invalid repository %s", repo_path);
+		cs_lock_release(restore_lock);
 		return -1;
 	}
 
 	if (cs_manifest_init(&manifest) != 0) {
+		cs_lock_release(restore_lock);
 		return -1;
 	}
 
 	if (cs_engine_restore_manifest(repo_path, snapshot_id, &manifest) != 0) {
-		cs_manifest_free(&manifest);
-		return -1;
+		goto restore_file_cleanup;
 	}
 
 	chunk_store = cs_chunk_store_open(repo_path);
 	if (chunk_store == NULL) {
-		cs_manifest_free(&manifest);
-		return -1;
+		goto restore_file_cleanup;
 	}
+
+	status = -1;
 
 	for (size_t fi = 0U; fi < manifest.file_count; ++fi) {
 		const cs_manifest_file_t *file = &manifest.files[fi];
@@ -1570,9 +1599,7 @@ int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const
 			char *slash;
 
 			if (cs_engine_join(full_out_path, sizeof(full_out_path), out_path, file->path) != 0) {
-				cs_chunk_store_close(chunk_store);
-				cs_manifest_free(&manifest);
-				return -1;
+				goto restore_file_cleanup;
 			}
 
 			slash = strrchr(full_out_path, cs_path_separator());
@@ -1580,37 +1607,33 @@ int cs_engine_restore_file(const char *repo_path, const char *snapshot_id, const
 				*slash = '\0';
 				if (cs_engine_mkdir_p(full_out_path) != 0) {
 					*slash = cs_path_separator();
-					cs_chunk_store_close(chunk_store);
-					cs_manifest_free(&manifest);
-					return -1;
+					goto restore_file_cleanup;
 				}
 				*slash = cs_path_separator();
 			}
 
 			cs_engine_join(parent, sizeof(parent), out_path, ".");
 			if (cs_engine_mkdir_p(parent) != 0) {
-				cs_chunk_store_close(chunk_store);
-				cs_manifest_free(&manifest);
-				return -1;
+				goto restore_file_cleanup;
 			}
 
 			if (cs_engine_restore_file_internal(chunk_store, file, out_path, passphrase) != 0) {
-				cs_chunk_store_close(chunk_store);
-				cs_manifest_free(&manifest);
-				return -1;
+				goto restore_file_cleanup;
 			}
 
 			printf("Restored single file: %s -> %s\n", source_file, full_out_path);
-			cs_chunk_store_close(chunk_store);
-			cs_manifest_free(&manifest);
-			return 0;
+			status = 0;
+			goto restore_file_cleanup;
 		}
 	}
 
+	CS_LOG_ERROR("engine: restore_file: '%s' not found in snapshot", source_file);
+
+restore_file_cleanup:
 	cs_chunk_store_close(chunk_store);
 	cs_manifest_free(&manifest);
-	CS_LOG_ERROR("engine: restore_file: '%s' not found in snapshot", source_file);
-	return -1;
+	cs_lock_release(restore_lock);
+	return status;
 }
 
 int cs_engine_verify(const char *repo_path, const char *passphrase) {
